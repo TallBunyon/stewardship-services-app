@@ -46,8 +46,8 @@ export default function InputBar({ onSend, disabled, appState }: Props) {
       : 'Message Steward…'
 
   return (
-    <div className="flex-shrink-0 border-t border-[#2a2a2a] bg-[#0d0d0d] px-4 py-3 sm:px-6">
-      <div className="flex items-end gap-2 bg-[#161616] border border-[#2a2a2a] rounded-xl px-3 py-2 focus-within:border-[#2cc5a0]/40 transition-colors">
+    <div className="flex-shrink-0 border-t border-white/8 bg-[#111111]/94 px-4 py-4 backdrop-blur sm:px-6">
+      <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-[#171717] px-3 py-2.5 transition-colors focus-within:border-[#2cc5a0]/40 focus-within:shadow-[0_0_0_1px_rgba(44,197,160,0.12)]">
         <textarea
           ref={textareaRef}
           rows={1}
@@ -56,19 +56,19 @@ export default function InputBar({ onSend, disabled, appState }: Props) {
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={disabled || appState === 'submitting'}
-          className="flex-1 bg-transparent text-sm text-neutral-200 placeholder-neutral-600 resize-none outline-none py-1 max-h-[120px] leading-relaxed disabled:opacity-50"
+          className="flex-1 resize-none bg-transparent py-1 text-sm leading-relaxed text-neutral-200 placeholder:text-white/28 outline-none max-h-[120px] disabled:opacity-50"
         />
         <button
           type="button"
           onClick={handleSubmit}
           disabled={disabled || !value.trim() || appState === 'submitting'}
           aria-label="Send message"
-          className="flex-shrink-0 w-8 h-8 rounded-lg bg-[#2cc5a0] text-[#0d0d0d] flex items-center justify-center transition-all hover:bg-[#1fa882] disabled:opacity-30 disabled:cursor-not-allowed active:scale-95"
+          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-[#2cc5a0] text-[#0d0d0d] transition-all hover:bg-[#22b08f] disabled:cursor-not-allowed disabled:opacity-30 active:scale-95"
         >
           <SendIcon />
         </button>
       </div>
-      <p className="text-[10px] text-neutral-700 text-center mt-2">
+      <p className="mt-2 text-center text-[10px] uppercase tracking-[0.16em] text-white/22">
         Shift+Enter for new line · Enter to send
       </p>
     </div>

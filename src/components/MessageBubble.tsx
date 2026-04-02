@@ -18,10 +18,10 @@ export default function MessageBubble({ message }: Props) {
       )}
 
       <div
-        className={`max-w-[80%] sm:max-w-[72%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+        className={`max-w-[82%] sm:max-w-[72%] rounded-2xl px-4 py-3 text-sm leading-7 shadow-[0_12px_28px_rgba(0,0,0,0.18)] ${
           isUser
-            ? 'bg-[#2cc5a0] text-[#0d0d0d] font-medium rounded-br-sm'
-            : 'bg-[#161616] border border-[#2a2a2a] text-neutral-200 rounded-bl-sm'
+            ? 'bg-[#2cc5a0] text-[#08110f] font-medium rounded-br-sm'
+            : 'bg-[#171717] border border-white/10 text-neutral-200 rounded-bl-sm'
         }`}
       >
         <MessageText content={message.content} />

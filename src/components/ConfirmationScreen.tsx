@@ -14,7 +14,7 @@ export default function ConfirmationScreen({ leadData }: Props) {
   const serviceLabel = SERVICE_LABELS[leadData.service] ?? leadData.service
 
   return (
-    <div className="flex-1 flex items-center justify-center px-4 py-8 sm:px-6">
+    <div className="flex flex-1 items-center justify-center px-4 py-8 sm:px-6">
       <div className="w-full max-w-md animate-fadeIn">
         {/* Icon */}
         <div className="flex justify-center mb-6">
@@ -24,24 +24,26 @@ export default function ConfirmationScreen({ leadData }: Props) {
         </div>
 
         {/* Heading */}
-        <div className="text-center mb-8">
-          <h2 className="text-xl font-semibold text-white mb-2">
+        <div className="mb-8 text-center">
+          <p className="mb-3 text-[11px] uppercase tracking-[0.24em] text-[#2cc5a0]/72">
+            Intake complete
+          </p>
+          <h2 className="mb-2 text-xl font-semibold text-white">
             Thank you, {leadData.name}!
           </h2>
-          <p className="text-neutral-400 text-sm leading-relaxed">
-            We will be in touch within{' '}
-            <span className="text-[#2cc5a0]">24 hours</span>.
+          <p className="text-sm leading-relaxed text-neutral-400">
+            We will be in touch within <span className="text-[#2cc5a0]">24 hours</span>.
           </p>
         </div>
 
         {/* Summary card */}
-        <div className="bg-[#161616] border border-[#2a2a2a] rounded-2xl overflow-hidden">
-          <div className="px-5 py-3 border-b border-[#2a2a2a]">
-            <p className="text-[11px] uppercase tracking-widest text-neutral-600 font-medium">
+        <div className="overflow-hidden rounded-[24px] border border-white/10 bg-[#171717] shadow-[0_24px_60px_rgba(0,0,0,0.25)]">
+          <div className="border-b border-white/10 px-5 py-3">
+            <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-white/36">
               Submission Summary
             </p>
           </div>
-          <div className="divide-y divide-[#2a2a2a]">
+          <div className="divide-y divide-white/10">
             <SummaryRow label="Name" value={leadData.name} />
             <SummaryRow label="Email" value={leadData.email} />
             {leadData.org && <SummaryRow label="Organization" value={leadData.org} />}
@@ -51,11 +53,10 @@ export default function ConfirmationScreen({ leadData }: Props) {
         </div>
 
         {/* Mission note */}
-        <div className="mt-6 bg-[#2cc5a0]/5 border border-[#2cc5a0]/15 rounded-xl px-4 py-3">
-          <p className="text-xs text-neutral-500 leading-relaxed text-center">
-            Your engagement helps fund{' '}
-            <span className="text-[#2cc5a0]/80">Node Zero</span> — a submerged data center
-            restoring aquatic ecosystems in a Kentucky quarry.
+        <div className="mt-6 rounded-2xl border border-[#2cc5a0]/15 bg-[#2cc5a0]/5 px-4 py-4">
+          <p className="text-center text-xs leading-relaxed text-white/42">
+            Your engagement helps fund <span className="text-[#2cc5a0]/80">Node Zero</span> —
+            compute infrastructure designed to belong to the landscape it lives in.
           </p>
         </div>
       </div>
@@ -74,7 +75,7 @@ function SummaryRow({
 }) {
   return (
     <div className="flex gap-4 px-5 py-3">
-      <span className="text-xs text-neutral-600 w-24 flex-shrink-0 pt-0.5">{label}</span>
+      <span className="w-24 flex-shrink-0 pt-0.5 text-xs text-white/34">{label}</span>
       <span
         className={`text-sm leading-relaxed break-words min-w-0 ${
           highlight ? 'text-[#2cc5a0] font-medium' : 'text-neutral-300'

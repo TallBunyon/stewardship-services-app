@@ -20,16 +20,26 @@ export default function ChatWindow({ messages, isTyping, appState, onSend }: Pro
   const inputDisabled = isTyping || appState !== 'chat'
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Messages scroll area */}
-      <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 space-y-4">
+    <div className="flex h-full flex-col">
+      <div className="border-b border-white/8 px-4 py-4 sm:px-6 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0))]">
+        <p className="text-[11px] uppercase tracking-[0.24em] text-[#2cc5a0]/75">Services conversation</p>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-white/58">
+          Tell Steward what you&apos;re trying to build, fix, or understand. He&apos;ll qualify the need,
+          recommend the right service, and route the lead cleanly.
+        </p>
+        <p className="mt-3 text-xs uppercase tracking-[0.18em] text-white/28">
+          Clear signal in. Clean lead out.
+        </p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 space-y-5">
         {messages.length === 0 && !isTyping && (
-          <div className="flex items-center justify-center h-full">
+          <div className="flex h-full items-center justify-center">
             <div className="text-center">
-              <div className="w-12 h-12 rounded-full bg-[#2cc5a0]/10 border border-[#2cc5a0]/20 flex items-center justify-center mx-auto mb-3">
-                <div className="w-4 h-4 rounded-full bg-[#2cc5a0]/60" />
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-[#2cc5a0]/20 bg-[#2cc5a0]/10">
+                <div className="h-4 w-4 rounded-full bg-[#2cc5a0]/65" />
               </div>
-              <p className="text-neutral-600 text-sm">Connecting to Steward…</p>
+              <p className="text-sm text-white/40">Connecting to Steward…</p>
             </div>
           </div>
         )}
@@ -42,7 +52,7 @@ export default function ChatWindow({ messages, isTyping, appState, onSend }: Pro
 
         {appState === 'error' && (
           <div className="flex justify-start animate-fadeIn">
-            <div className="bg-red-950/40 border border-red-800/40 text-red-300 text-sm rounded-xl px-4 py-2.5 max-w-[80%]">
+            <div className="max-w-[80%] rounded-2xl border border-red-800/40 bg-red-950/30 px-4 py-3 text-sm text-red-200">
               Something went wrong. Please refresh the page and try again.
             </div>
           </div>
@@ -60,10 +70,10 @@ export default function ChatWindow({ messages, isTyping, appState, onSend }: Pro
 function TypingIndicator() {
   return (
     <div className="flex items-center gap-2 animate-fadeIn">
-      <div className="w-7 h-7 rounded-full bg-[#2cc5a0]/10 border border-[#2cc5a0]/25 flex items-center justify-center flex-shrink-0">
-        <div className="w-2 h-2 rounded-full bg-[#2cc5a0]" />
+      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-[#2cc5a0]/25 bg-[#2cc5a0]/10">
+        <div className="h-2 w-2 rounded-full bg-[#2cc5a0]" />
       </div>
-      <div className="bg-[#161616] border border-[#2a2a2a] rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm border border-white/10 bg-[#171717] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.18)]">
         <Dot delay="0ms" />
         <Dot delay="200ms" />
         <Dot delay="400ms" />
