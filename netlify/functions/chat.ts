@@ -1,7 +1,8 @@
 import type { Handler, HandlerEvent } from '@netlify/functions'
-import Anthropic from '@anthropic-ai/sdk'
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const PRIMARY_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'
+const FALLBACK_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free'
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 const SYSTEM_PROMPT = `You are Steward, the AI agent for Stewardship Compute LLC. You help potential clients figure out which of our three services is right for them.
 
@@ -31,13 +32,56 @@ interface IncomingMessage {
   content: string
 }
 
+interface OpenRouterResponse {
+  choices?: Array<{
+    message?: {
+      content?: string
+    }
+  }>
+}
+
+async function callOpenRouter(
+  model: string,
+  messages: IncomingMessage[],
+  apiKey: string,
+): Promise<string> {
+  const response = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+      'HTTP-Referer': 'https://services.stewardshipcomputellc.com',
+      'X-Title': 'Steward Services Intake',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 300,
+      messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
+    }),
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`OpenRouter request failed for ${model}: ${response.status} ${body}`)
+  }
+
+  const data = (await response.json()) as OpenRouterResponse
+  const content = data.choices?.[0]?.message?.content
+
+  if (typeof content !== 'string') {
+    throw new Error(`OpenRouter returned an invalid response for ${model}`)
+  }
+
+  return content
+}
+
 export const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method Not Allowed' }
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return { statusCode: 500, body: 'ANTHROPIC_API_KEY is not configured' }
+  if (!process.env.OPENROUTER_API_KEY) {
+    return { statusCode: 500, body: 'OPENROUTER_API_KEY is not configured' }
   }
 
   let body: { messages?: IncomingMessage[] }
@@ -53,38 +97,25 @@ export const handler: Handler = async (event: HandlerEvent) => {
   const trimmed = rawMessages.slice(-10)
 
   // Validate roles
-  const userMessages: Anthropic.Messages.MessageParam[] = trimmed
+  const userMessages: IncomingMessage[] = trimmed
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .map((m) => ({ role: m.role, content: m.content }))
 
-  // Handle initial greeting: Anthropic requires at least one user message
-  const messages: Anthropic.Messages.MessageParam[] =
+  // Handle initial greeting: ensure at least one user message
+  const messages: IncomingMessage[] =
     userMessages.length === 0
       ? [{ role: 'user', content: 'Hello' }]
       : userMessages
 
   try {
-    const response = await client.messages.create({
-      model: 'claude-haiku-4-5',
-      max_tokens: 300,
-      system: [
-        {
-          type: 'text',
-          text: SYSTEM_PROMPT,
-          cache_control: { type: 'ephemeral' },
-        } as Anthropic.TextBlockParam,
-      ],
-      messages,
-    })
+    let content: string
 
-    // Log token usage server-side
-    console.log('[chat] token usage:', JSON.stringify(response.usage))
-
-    const content =
-      response.content
-        .filter((block): block is Anthropic.Messages.TextBlock => block.type === 'text')
-        .map((block) => block.text)
-        .join('') ?? ''
+    try {
+      content = await callOpenRouter(PRIMARY_MODEL, messages, process.env.OPENROUTER_API_KEY)
+    } catch (primaryError) {
+      console.error('[chat function] primary model failed:', primaryError)
+      content = await callOpenRouter(FALLBACK_MODEL, messages, process.env.OPENROUTER_API_KEY)
+    }
 
     return {
       statusCode: 200,
@@ -92,7 +123,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
       body: JSON.stringify({ content }),
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Anthropic API error'
+    const message = err instanceof Error ? err.message : 'OpenRouter API error'
     console.error('[chat function]', message)
     return { statusCode: 502, body: message }
   }
