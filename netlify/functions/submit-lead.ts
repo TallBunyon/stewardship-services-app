@@ -23,7 +23,9 @@ function formatTimestampCST(): string {
   )
 }
 
-const OPENCLAW_GATEWAY_URL = 'http://127.0.0.1:18789/api/message'
+const OPENCLAW_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL 
+  ? `${process.env.OPENCLAW_GATEWAY_URL}/api/message`
+  : 'http://127.0.0.1:18789/api/message'
 const GOG_ACCOUNT = 'steward@stewardshipcomputellc.com'
 const GOG_TO = 'bobby.owen@stewardshipcomputellc.com'
 
