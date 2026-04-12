@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import type { Handler, HandlerEvent } from '@netlify/functions'
 
 interface LeadData {
@@ -26,8 +25,7 @@ function formatTimestampCST(): string {
 const OPENCLAW_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL 
   ? `${process.env.OPENCLAW_GATEWAY_URL}/api/message`
   : 'http://127.0.0.1:18789/api/message'
-const GOG_ACCOUNT = 'steward@stewardshipcomputellc.com'
-const GOG_TO = 'bobby.owen@stewardshipcomputellc.com'
+
 
 function buildGatewayMessage(lead: LeadData, timestamp: string): string {
   return `New lead received. Assess this and compose a professional email to bobby.owen@stewardshipcomputellc.com with your full analysis and recommendation.
@@ -46,18 +44,7 @@ After composing your assessment, send it via gog gmail send from steward@steward
 }
 
 function buildFallbackBody(lead: LeadData, timestamp: string): string {
-  return [
-    'New Lead — Stewardship Compute Services (Direct Fallback)',
-    '',
-    `Name: ${lead.name}`,
-    `Email: ${lead.email}`,
-    `Org: ${lead.org || 'N/A'}`,
-    `Service: ${lead.service}`,
-    `Summary: ${lead.summary}`,
-    `Time: ${timestamp}`,
-    '',
-    'ACTION REQUIRED: OpenClaw gateway unavailable. Review and respond manually.',
-  ].join('\n')
+  return `🌱 New Lead — Stewardship Compute\n\nName: ${lead.name}\nEmail: ${lead.email}\nOrg: ${lead.org || 'N/A'}\nService: ${lead.service}\nSummary: ${lead.summary}\nTime: ${timestamp}\n\nReply APPROVE to begin outreach.`
 }
 
 async function sendToOpenClaw(lead: LeadData, timestamp: string): Promise<void> {
@@ -77,6 +64,7 @@ async function sendToOpenClaw(lead: LeadData, timestamp: string): Promise<void> 
       agent: 'steward',
       message: buildGatewayMessage(lead, timestamp),
     }),
+    signal: AbortSignal.timeout(8000),
   })
 
   if (!response.ok) {
@@ -85,59 +73,34 @@ async function sendToOpenClaw(lead: LeadData, timestamp: string): Promise<void> 
   }
 }
 
-async function sendDirectFallbackEmail(lead: LeadData, timestamp: string): Promise<void> {
-  const subject = `New Lead: ${lead.name} — ${lead.service}`
-  const body = buildFallbackBody(lead, timestamp)
+async function sendTelegramFallbackNotification(lead: LeadData, timestamp: string): Promise<void> {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN
+  const chatId = process.env.TELEGRAM_CHAT_ID
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      'gog',
-      [
-        'gmail',
-        'send',
-        '--account',
-        GOG_ACCOUNT,
-        '--to',
-        GOG_TO,
-        '--subject',
-        subject,
-        '--body-file',
-        '-',
-      ],
-      {
-        env: {
-          ...process.env,
-          GOGCLI_CONFIG_DIR: '/home/tallbunyon/.config/gogcli',
-          GOG_KEYRING_PASSWORD: process.env.GOG_KEYRING_PASSWORD ?? '',
-          GOG_ACCOUNT,
-          PATH: '/usr/local/bin:/usr/bin:/bin',
-        },
-        stdio: ['pipe', 'ignore', 'pipe'],
-      },
-    )
+  if (!botToken) {
+    throw new Error('TELEGRAM_BOT_TOKEN is not configured')
+  }
 
-    let stderr = ''
+  if (!chatId) {
+    throw new Error('TELEGRAM_CHAT_ID is not configured')
+  }
 
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk
-    })
-
-    child.on('error', (error) => {
-      reject(error)
-    })
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve()
-        return
-      }
-
-      reject(new Error(stderr.trim() || `gog gmail send exited with code ${code ?? 'unknown'}`))
-    })
-
-    child.stdin.end(body)
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: buildFallbackBody(lead, timestamp),
+      parse_mode: 'HTML',
+    }),
   })
+
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`Telegram fallback returned ${response.status}: ${body}`)
+  }
 }
 
 export const handler: Handler = async (event: HandlerEvent) => {
@@ -172,7 +135,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
       gatewayError instanceof Error ? gatewayError.message : 'OpenClaw gateway request failed'
 
     try {
-      await sendDirectFallbackEmail(lead, timestamp)
+      await sendTelegramFallbackNotification(lead, timestamp)
 
       return {
         statusCode: 200,
@@ -181,9 +144,9 @@ export const handler: Handler = async (event: HandlerEvent) => {
       }
     } catch (fallbackError) {
       const fallbackMessage =
-        fallbackError instanceof Error ? fallbackError.message : 'Fallback email delivery failed'
-      console.error('[submit-lead] fallback email error:', fallbackError)
-      return { statusCode: 502, body: `${gatewayMessage}; fallback email failed: ${fallbackMessage}` }
+        fallbackError instanceof Error ? fallbackError.message : 'Fallback Telegram notification failed'
+      console.error('[submit-lead] Telegram fallback error:', fallbackError)
+      return { statusCode: 502, body: `${gatewayMessage}; Telegram fallback failed: ${fallbackMessage}` }
     }
   }
 }

@@ -25,7 +25,9 @@ RULES:
 - Keep responses SHORT (2-4 sentences max)
 - Never list all three services upfront — qualify first, then recommend
 - Be direct and confident, not salesy
-- Max 8 messages total per session`
+- Max 8 messages total per session
+- Never narrate your reasoning or thought process — respond only with what you would say to the visitor
+- Never use phrases like "Let me confirm" followed by internal logic — just respond naturally`
 
 interface IncomingMessage {
   role: 'user' | 'assistant'
