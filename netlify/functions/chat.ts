@@ -46,6 +46,15 @@ interface OpenRouterResponse {
   }>
 }
 
+function getEnv(key: string): string | undefined {
+  const netlifyValue = (
+    globalThis as typeof globalThis & {
+      Netlify?: { env: { get: (name: string) => string | undefined } }
+    }
+  ).Netlify?.env.get(key)
+  return netlifyValue || process.env[key]
+}
+
 async function callOpenRouter(
   model: string,
   messages: IncomingMessage[],
@@ -115,7 +124,10 @@ export const handler: Handler = async (event: HandlerEvent) => {
     return { statusCode: 405, body: 'Method Not Allowed' }
   }
 
-  if (!process.env.NVIDIA_API_KEY && !process.env.OPENROUTER_API_KEY) {
+  const nvidiaApiKey = getEnv('NVIDIA_API_KEY')
+  const openRouterApiKey = getEnv('OPENROUTER_API_KEY')
+
+  if (!nvidiaApiKey && !openRouterApiKey) {
     return { statusCode: 500, body: 'Neither NVIDIA_API_KEY nor OPENROUTER_API_KEY is configured' }
   }
 
@@ -146,26 +158,26 @@ export const handler: Handler = async (event: HandlerEvent) => {
     let content: string
 
     try {
-      if (!process.env.OPENROUTER_API_KEY) {
+      if (!openRouterApiKey) {
         throw new Error('OPENROUTER_API_KEY is not configured')
       }
-      content = await callOpenRouter(PRIMARY_MODEL, messages, process.env.OPENROUTER_API_KEY)
+      content = await callOpenRouter(PRIMARY_MODEL, messages, openRouterApiKey)
     } catch (primaryError) {
       console.error('[chat function] primary model failed:', primaryError)
 
       try {
-        if (!process.env.NVIDIA_API_KEY) {
+        if (!nvidiaApiKey) {
           throw new Error('NVIDIA_API_KEY is not configured')
         }
-        content = await callNIM(messages, process.env.NVIDIA_API_KEY)
+        content = await callNIM(messages, nvidiaApiKey)
       } catch (nimError) {
         console.error('[chat function] NIM model failed:', nimError)
 
-        if (!process.env.OPENROUTER_API_KEY) {
+        if (!openRouterApiKey) {
           throw nimError
         }
 
-        content = await callOpenRouter(FALLBACK_MODEL, messages, process.env.OPENROUTER_API_KEY)
+        content = await callOpenRouter(FALLBACK_MODEL, messages, openRouterApiKey)
       }
     }
 
