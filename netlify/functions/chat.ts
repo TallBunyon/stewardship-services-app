@@ -3,6 +3,8 @@ import type { Handler, HandlerEvent } from '@netlify/functions'
 const PRIMARY_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'
 const FALLBACK_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const NIM_URL = 'https://integrate.api.nvidia.com/v1/chat/completions'
+const NIM_MODEL = 'deepseek-ai/deepseek-v3.1'
 
 const SYSTEM_PROMPT = `CRITICAL INSTRUCTION: You are speaking DIRECTLY to a website visitor. Output ONLY your spoken response to them — nothing else. Never write your thoughts, reasoning, planning, or internal monologue. If you catch yourself writing "I should..." or "I'll say..." or "I need to..." — STOP and delete it. Only your final words to the visitor appear in your response.
 
@@ -79,13 +81,42 @@ async function callOpenRouter(
   return content
 }
 
+async function callNIM(messages: IncomingMessage[], apiKey: string): Promise<string> {
+  const response = await fetch(NIM_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: NIM_MODEL,
+      max_tokens: 300,
+      messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
+    }),
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`NIM request failed for ${NIM_MODEL}: ${response.status} ${body}`)
+  }
+
+  const data = (await response.json()) as OpenRouterResponse
+  const content = data.choices?.[0]?.message?.content
+
+  if (typeof content !== 'string') {
+    throw new Error(`NIM returned an invalid response for ${NIM_MODEL}`)
+  }
+
+  return content
+}
+
 export const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method Not Allowed' }
   }
 
-  if (!process.env.OPENROUTER_API_KEY) {
-    return { statusCode: 500, body: 'OPENROUTER_API_KEY is not configured' }
+  if (!process.env.NVIDIA_API_KEY && !process.env.OPENROUTER_API_KEY) {
+    return { statusCode: 500, body: 'Neither NVIDIA_API_KEY nor OPENROUTER_API_KEY is configured' }
   }
 
   let body: { messages?: IncomingMessage[] }
@@ -115,10 +146,23 @@ export const handler: Handler = async (event: HandlerEvent) => {
     let content: string
 
     try {
-      content = await callOpenRouter(PRIMARY_MODEL, messages, process.env.OPENROUTER_API_KEY)
-    } catch (primaryError) {
-      console.error('[chat function] primary model failed:', primaryError)
-      content = await callOpenRouter(FALLBACK_MODEL, messages, process.env.OPENROUTER_API_KEY)
+      if (!process.env.NVIDIA_API_KEY) {
+        throw new Error('NVIDIA_API_KEY is not configured')
+      }
+      content = await callNIM(messages, process.env.NVIDIA_API_KEY)
+    } catch (nimError) {
+      console.error('[chat function] NIM model failed:', nimError)
+
+      if (!process.env.OPENROUTER_API_KEY) {
+        throw nimError
+      }
+
+      try {
+        content = await callOpenRouter(PRIMARY_MODEL, messages, process.env.OPENROUTER_API_KEY)
+      } catch (primaryError) {
+        console.error('[chat function] primary model failed:', primaryError)
+        content = await callOpenRouter(FALLBACK_MODEL, messages, process.env.OPENROUTER_API_KEY)
+      }
     }
 
     return {
