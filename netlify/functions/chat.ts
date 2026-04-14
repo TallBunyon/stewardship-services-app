@@ -146,21 +146,25 @@ export const handler: Handler = async (event: HandlerEvent) => {
     let content: string
 
     try {
-      if (!process.env.NVIDIA_API_KEY) {
-        throw new Error('NVIDIA_API_KEY is not configured')
-      }
-      content = await callNIM(messages, process.env.NVIDIA_API_KEY)
-    } catch (nimError) {
-      console.error('[chat function] NIM model failed:', nimError)
-
       if (!process.env.OPENROUTER_API_KEY) {
-        throw nimError
+        throw new Error('OPENROUTER_API_KEY is not configured')
       }
+      content = await callOpenRouter(PRIMARY_MODEL, messages, process.env.OPENROUTER_API_KEY)
+    } catch (primaryError) {
+      console.error('[chat function] primary model failed:', primaryError)
 
       try {
-        content = await callOpenRouter(PRIMARY_MODEL, messages, process.env.OPENROUTER_API_KEY)
-      } catch (primaryError) {
-        console.error('[chat function] primary model failed:', primaryError)
+        if (!process.env.NVIDIA_API_KEY) {
+          throw new Error('NVIDIA_API_KEY is not configured')
+        }
+        content = await callNIM(messages, process.env.NVIDIA_API_KEY)
+      } catch (nimError) {
+        console.error('[chat function] NIM model failed:', nimError)
+
+        if (!process.env.OPENROUTER_API_KEY) {
+          throw nimError
+        }
+
         content = await callOpenRouter(FALLBACK_MODEL, messages, process.env.OPENROUTER_API_KEY)
       }
     }
