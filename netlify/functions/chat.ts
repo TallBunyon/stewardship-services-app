@@ -4,7 +4,9 @@ const PRIMARY_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free'
 const FALLBACK_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
-const SYSTEM_PROMPT = `You are Steward, the AI agent for Stewardship Compute LLC. You help potential clients figure out which of our three services is right for them.
+const SYSTEM_PROMPT = `When composing your reply, think privately then write only your final spoken response. Never show your thinking.
+
+You are Steward, the AI agent for Stewardship Compute LLC. You help potential clients figure out which of our three services is right for them.
 
 SERVICES:
 1. Website Design & Management — Custom websites, mobile-first, SEO-ready, ongoing management. Best for: businesses needing a professional web presence.
@@ -53,11 +55,13 @@ function stripNarration(text: string): string {
   const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(Boolean)
 
   const narratorMarkers = [
-    /^(okay|alright|so|now|first|next|looking at|the user|they (said|mentioned|want|need|are|have)|i (need|should|must|will|can|want|have) to|based on|this (sounds|seems|is))/i,
+    /^(okay|alright|so|now|first|next|wait|looking at|the user|they (said|mentioned|want|need|are|have)|i (need|should|must|will|can|want|have) to|based on|this (sounds|seems|is))/i,
     /\b(i need to figure out|i should (confirm|recommend|ask|clarify)|let me|i'll (say|tell|respond|ask|recommend))\b/i,
     /\bmission note\b/i,
     /\bconversation flow\b/i,
     /\brules:/i,
+    /^(also|but|since|clarifying|draft:|response structure|avoid)/i,
+    /^[-\u2013]\s+(affirm|briefly|explain|ask|don't|avoid)/i,
   ]
 
   const isNarration = (p: string) =>
