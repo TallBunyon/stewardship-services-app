@@ -55,7 +55,7 @@ function stripNarration(text: string): string {
   const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(Boolean)
 
   const narratorMarkers = [
-    /^(okay|alright|so|now|first|next|wait|looking at|the user|they (said|mentioned|want|need|are|have)|i (need|should|must|will|can|want|have) to|based on|this (sounds|seems|is))/i,
+    /^(okay|alright|so|now|first|next|wait|hmm|looking at|the user|they (said|mentioned|want|need|are|have)|i (need|should|must|will|can|want|have) to|based on|this (sounds|seems|is))/i,
     /\b(i need to figure out|i should (confirm|recommend|ask|clarify)|let me|i'll (say|tell|respond|ask|recommend))\b/i,
     /\bmission note\b/i,
     /\bconversation flow\b/i,
