@@ -1,6 +1,6 @@
 import type { Handler, HandlerEvent } from '@netlify/functions'
 
-const MODEL = 'meta-llama/llama-3-8b-instruct:free'
+const MODEL = 'openai/gpt-oss-120b:free'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 const SYSTEM_PROMPT = 'You are Intake Steward, the first point of contact for Stewardship Compute LLC. Your goal is to qualify web design and AI workflow leads. Keep responses short and conversational. 1. Ask what they are trying to build. 2. Briefly explain that all revenue funds Node Zero (our October 2026 patent deadline for regenerative ecological-compute infrastructure). 3. Ask for their budget, timeline, and email address. 4. Once you have all info, conclude by saying exactly: "Thank you, Bobby will review this and reach out shortly." '
