@@ -71,6 +71,35 @@ async function callOpenRouter(
   return content
 }
 
+async function saveCompletedLead(chatTranscript: IncomingMessage[]): Promise<void> {
+  const supabaseUrl = getEnv('SUPABASE_URL')
+  const supabaseAnonKey = getEnv('SUPABASE_ANON_KEY')
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.warn('[chat function] Supabase env vars are not configured; skipping lead save')
+    return
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/inbound_leads`, {
+    method: 'POST',
+    headers: {
+      'apikey': supabaseAnonKey,
+      'Authorization': `Bearer ${supabaseAnonKey}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal',
+    },
+    body: JSON.stringify({
+      chat_transcript: chatTranscript,
+      status: 'unread',
+    }),
+  })
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    throw new Error(`Supabase lead save failed: ${response.status} ${body}`.trim())
+  }
+}
+
 export const handler: Handler = async (event: HandlerEvent) => {
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, body: '' }
@@ -109,6 +138,15 @@ export const handler: Handler = async (event: HandlerEvent) => {
 
   try {
     const content = await callOpenRouter(finalMessages, apiKey)
+
+    if (content.includes('Bobby will review this')) {
+      try {
+        await saveCompletedLead(finalMessages)
+      } catch (dbErr) {
+        const message = dbErr instanceof Error ? dbErr.message : 'Unknown Supabase error'
+        console.error('[chat function] Lead trap door failed:', message)
+      }
+    }
 
     return {
       statusCode: 200,
