@@ -1,9 +1,8 @@
 import { useChat } from './hooks/useChat'
 import ChatWindow from './components/ChatWindow'
-import ConfirmationScreen from './components/ConfirmationScreen'
 
 export default function App() {
-  const { messages, isTyping, appState, leadData, sendMessage } = useChat()
+  const { messages, isTyping, appState, sendMessage } = useChat()
 
   return (
     <div className="flex min-h-full flex-col bg-[#0d0d0d] text-white">
@@ -82,16 +81,12 @@ export default function App() {
           </section>
 
           <section className="overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(20,20,20,0.96),rgba(11,11,11,0.98))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] min-h-[70vh] flex flex-col">
-            {appState === 'confirmed' && leadData ? (
-              <ConfirmationScreen leadData={leadData} />
-            ) : (
-              <ChatWindow
-                messages={messages}
-                isTyping={isTyping}
-                appState={appState}
-                onSend={sendMessage}
-              />
-            )}
+            <ChatWindow
+              messages={messages}
+              isTyping={isTyping}
+              appState={appState}
+              onSend={sendMessage}
+            />
           </section>
         </div>
       </main>

@@ -1,33 +1,9 @@
 import type { Handler, HandlerEvent } from '@netlify/functions'
 
-const PRIMARY_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free'
-const FALLBACK_MODEL = 'meta-llama/llama-3.3-70b-instruct:free'
+const MODEL = 'meta-llama/llama-3-8b-instruct:free'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
-const SYSTEM_PROMPT = `When composing your reply, think privately then write only your final spoken response. Never show your thinking.
-
-You are Steward, the AI agent for Stewardship Compute LLC. You help potential clients figure out which of our three services is right for them.
-
-SERVICES:
-1. Website Design & Management — Custom websites, mobile-first, SEO-ready, ongoing management. Best for: businesses needing a professional web presence.
-2. AI Tool Stack Consultation — Workflow audit, tool recommendations, implementation, training. Best for: businesses wanting to adopt AI but unsure where to start.
-3. App Design & Development — Full-stack web apps, React/Vite/TypeScript/Supabase, Stripe integration. Best for: businesses with a specific software problem to solve.
-
-YOUR MISSION: Stewardship Compute builds Node Zero — a submerged data center in a Kentucky quarry that restores aquatic ecosystems while running compute infrastructure. Client revenue funds this mission. Mention it naturally when relevant.
-
-CONVERSATION FLOW:
-1. Warm greeting, ask what they are trying to build or solve (one question)
-2. Listen and ask 1-2 clarifying questions max
-3. Recommend the best service with a brief confident explanation
-4. Ask for: name, email, organization (optional), and a one-line project summary
-5. Confirm details back to them before submitting
-6. When they confirm, output EXACTLY this on its own line: LEAD_READY:{"name":"...","email":"...","org":"...","service":"...","summary":"..."}
-
-RULES:
-- Keep responses SHORT (2-4 sentences max)
-- Never list all three services upfront — qualify first, then recommend
-- Be direct and confident, not salesy
-- Max 8 messages total per session`
+const SYSTEM_PROMPT = 'You are Intake Steward, the first point of contact for Stewardship Compute LLC. Your goal is to qualify web design and AI workflow leads. Keep responses short and conversational. 1. Ask what they are trying to build. 2. Briefly explain that all revenue funds Node Zero (our October 2026 patent deadline for regenerative ecological-compute infrastructure). 3. Ask for their budget, timeline, and email address. 4. Once you have all info, conclude by saying exactly: "Thank you, Bobby will review this and reach out shortly." '
 
 interface IncomingMessage {
   role: 'user' | 'assistant'
@@ -42,6 +18,12 @@ interface OpenRouterResponse {
   }>
 }
 
+interface OpenRouterErrorResponse {
+  error?: {
+    message?: string
+  }
+}
+
 function getEnv(key: string): string | undefined {
   const netlifyValue = (
     globalThis as typeof globalThis & {
@@ -51,32 +33,10 @@ function getEnv(key: string): string | undefined {
   return netlifyValue || process.env[key]
 }
 
-function stripNarration(text: string): string {
-  const paragraphs = text.split(/\n\n+/).map(p => p.trim()).filter(Boolean)
-
-  const narratorMarkers = [
-    /^(okay|alright|so|now|first|next|wait|hmm|looking at|the user|they (said|mentioned|want|need|are|have)|i (need|should|must|will|can|want|have) to|based on|this (sounds|seems|is))/i,
-    /\b(i need to figure out|i should (confirm|recommend|ask|clarify)|let me|i'll (say|tell|respond|ask|recommend))\b/i,
-    /\bmission note\b/i,
-    /\bconversation flow\b/i,
-    /\brules:/i,
-    /^(also|but|since|clarifying|draft:|response structure|avoid)/i,
-    /^[-\u2013]\s+(affirm|briefly|explain|ask|don't|avoid)/i,
-  ]
-
-  const isNarration = (p: string) =>
-    narratorMarkers.some(pattern => pattern.test(p))
-
-  const clean = paragraphs.filter(p => !isNarration(p))
-
-  return (clean.length > 0 ? clean : [paragraphs[paragraphs.length - 1]]).join('\n\n').trim()
-}
-
 async function callOpenRouter(
-  model: string,
   messages: IncomingMessage[],
   apiKey: string
-): Promise<string | null> {
+): Promise<string> {
   const response = await fetch(OPENROUTER_URL, {
     method: 'POST',
     headers: {
@@ -86,8 +46,8 @@ async function callOpenRouter(
       'X-Title': 'Stewardship Compute Services',
     },
     body: JSON.stringify({
-      model,
-      max_tokens: 600,
+      model: MODEL,
+      max_tokens: 300,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         ...messages,
@@ -96,16 +56,26 @@ async function callOpenRouter(
   })
 
   if (!response.ok) {
-    console.error(`[chat] OpenRouter error: ${response.status} ${response.statusText}`)
-    return null
+    const errorBody = (await response.json().catch(() => null)) as OpenRouterErrorResponse | null
+    const message = errorBody?.error?.message || `${response.status} ${response.statusText}`
+    throw new Error(`OpenRouter request failed: ${message}`)
   }
 
   const data: OpenRouterResponse = await response.json()
-  const raw = data.choices?.[0]?.message?.content ?? null
-  return raw ? stripNarration(raw) : null
+  const content = data.choices?.[0]?.message?.content?.trim()
+
+  if (!content) {
+    throw new Error('OpenRouter returned an empty response')
+  }
+
+  return content
 }
 
 export const handler: Handler = async (event: HandlerEvent) => {
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, body: '' }
+  }
+
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method Not Allowed' }
   }
@@ -123,9 +93,13 @@ export const handler: Handler = async (event: HandlerEvent) => {
   }
 
   const rawMessages: IncomingMessage[] = body.messages ?? []
-  const trimmed = rawMessages.slice(-10)
+  const trimmed = rawMessages.slice(-12)
+
   const messages: IncomingMessage[] = trimmed.filter(
-    (m) => m.role === 'user' || m.role === 'assistant'
+    (m) =>
+      (m.role === 'user' || m.role === 'assistant') &&
+      typeof m.content === 'string' &&
+      m.content.trim().length > 0
   )
 
   const finalMessages: IncomingMessage[] =
@@ -134,16 +108,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
       : messages
 
   try {
-    let content = await callOpenRouter(PRIMARY_MODEL, finalMessages, apiKey)
-
-    if (!content) {
-      console.warn('[chat] Primary model failed, falling back')
-      content = await callOpenRouter(FALLBACK_MODEL, finalMessages, apiKey)
-    }
-
-    if (!content) {
-      return { statusCode: 502, body: 'Both models failed to respond' }
-    }
+    const content = await callOpenRouter(finalMessages, apiKey)
 
     return {
       statusCode: 200,
