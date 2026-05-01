@@ -1,11 +1,14 @@
 import type { Handler, HandlerEvent } from '@netlify/functions'
 
 interface LeadData {
-  name: string
-  email: string
+  name?: string
+  email?: string
   org: string
   service: string
   summary: string
+  budget?: string
+  timeline?: string
+  transcript?: string
 }
 
 function formatTimestampCST(): string {
@@ -25,6 +28,39 @@ function formatTimestampCST(): string {
 const OPENCLAW_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL 
   ? `${process.env.OPENCLAW_GATEWAY_URL}/api/message`
   : 'http://127.0.0.1:18789/api/message'
+
+async function persistLeadToSupabase(lead: LeadData): Promise<void> {
+  const supabaseUrl = process.env.SUPABASE_URL
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured')
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/inbound_leads`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      created_at: new Date().toISOString(),
+      name: lead.name ?? null,
+      email: lead.email ?? null,
+      budget: lead.budget ?? null,
+      timeline: lead.timeline ?? null,
+      transcript: lead.transcript ?? lead.summary ?? null,
+      source: 'steward-services',
+    }),
+  })
+
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`Supabase insert returned ${response.status}: ${body}`)
+  }
+}
 
 
 function buildGatewayMessage(lead: LeadData, timestamp: string): string {
@@ -120,15 +156,11 @@ export const handler: Handler = async (event: HandlerEvent) => {
   }
 
   const timestamp = formatTimestampCST()
+  let forwarded = false
 
   try {
     await sendToOpenClaw(lead, timestamp)
-
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ok: true }),
-    }
+    forwarded = true
   } catch (gatewayError) {
     console.error('[submit-lead] OpenClaw gateway error:', gatewayError)
     const gatewayMessage =
@@ -136,17 +168,26 @@ export const handler: Handler = async (event: HandlerEvent) => {
 
     try {
       await sendTelegramFallbackNotification(lead, timestamp)
-
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok: true }),
-      }
+      forwarded = true
     } catch (fallbackError) {
       const fallbackMessage =
         fallbackError instanceof Error ? fallbackError.message : 'Fallback Telegram notification failed'
       console.error('[submit-lead] Telegram fallback error:', fallbackError)
       return { statusCode: 502, body: `${gatewayMessage}; Telegram fallback failed: ${fallbackMessage}` }
     }
+  }
+
+  if (forwarded) {
+    try {
+      await persistLeadToSupabase(lead)
+    } catch (supabaseError) {
+      console.error('[submit-lead] Supabase persistence error:', supabaseError)
+    }
+  }
+
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ok: true }),
   }
 }
