@@ -68,7 +68,7 @@ async function sendEmailNotification(lead: LeadData, timestamp: string): Promise
   const notifyEmail = process.env.NOTIFY_EMAIL || 'bobby.owen@stewardshipcomputellc.com'
 
   if (!resendApiKey) {
-    throw new Error('RESEND_API_KEY is not configured')
+    throw new Error('RESEND_API_KEY not configured')
   }
 
   const response = await fetch('https://api.resend.com/emails', {
@@ -81,13 +81,12 @@ async function sendEmailNotification(lead: LeadData, timestamp: string): Promise
       from: 'Steward <activate@stewardshipcomputellc.com>',
       to: notifyEmail,
       subject: `New Lead: ${lead.name} — ${lead.service}`,
-      text: `New lead received at ${timestamp}\n\nName: ${lead.name}\nEmail: ${lead.email}\nOrg: ${lead.org || 'N/A'}\nService: ${lead.service}\nSummary: ${lead.summary}\nBudget: ${lead.budget || 'N/A'}\nTimeline: ${lead.timeline || 'N/A'}`,
+      text: `New lead at ${timestamp}\n\nName: ${lead.name}\nEmail: ${lead.email}\nOrg: ${lead.org || 'N/A'}\nService: ${lead.service}\nSummary: ${lead.summary}\nBudget: ${lead.budget || 'N/A'}\nTimeline: ${lead.timeline || 'N/A'}`,
     }),
   })
 
   if (!response.ok) {
-    const body = await response.text()
-    throw new Error(`Resend returned ${response.status}: ${body}`)
+    throw new Error(`Resend ${response.status}: ${await response.text()}`)
   }
 }
 
