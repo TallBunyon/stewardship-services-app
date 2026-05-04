@@ -146,6 +146,28 @@ export const handler: Handler = async (event: HandlerEvent) => {
         const message = dbErr instanceof Error ? dbErr.message : 'Unknown Supabase error'
         console.error('[chat function] Lead trap door failed:', message)
       }
+
+      try {
+        const resendKey = getEnv('RESEND_API_KEY')
+        const notifyEmail = getEnv('NOTIFY_EMAIL') || 'bobby.owen@stewardshipcomputellc.com'
+        if (resendKey) {
+          await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${resendKey}`
+            },
+            body: JSON.stringify({
+              from: 'Steward <activate@stewardshipcomputellc.com>',
+              to: notifyEmail,
+              subject: 'New Qualified Lead — Stewardship Services',
+              text: `A new lead was qualified and saved.\n\nTranscript:\n${finalMessages.map((m: {role: string, content: string}) => `${m.role}: ${m.content}`).join('\n\n')}`
+            })
+          })
+        }
+      } catch (emailErr) {
+        console.error('[chat function] Resend notification failed:', emailErr)
+      }
     }
 
     return {
