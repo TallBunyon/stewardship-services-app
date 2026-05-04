@@ -25,10 +25,6 @@ function formatTimestampCST(): string {
   )
 }
 
-const OPENCLAW_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL 
-  ? `${process.env.OPENCLAW_GATEWAY_URL}/api/message`
-  : 'http://127.0.0.1:18789/api/message'
-
 async function persistLeadToSupabase(lead: LeadData): Promise<void> {
   const supabaseUrl = process.env.SUPABASE_URL
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -63,49 +59,35 @@ async function persistLeadToSupabase(lead: LeadData): Promise<void> {
 }
 
 
-function buildGatewayMessage(lead: LeadData, timestamp: string): string {
-  return `New lead received. Assess this and compose a professional email to bobby.owen@stewardshipcomputellc.com with your full analysis and recommendation.
-
-Lead Data:
-Name: ${lead.name}
-Email: ${lead.email}
-Organization: ${lead.org || 'N/A'}
-Service Requested: ${lead.service}
-Project Summary: ${lead.summary}
-Time: ${timestamp}
-
-Assess mission alignment, budget signal, recommended approach, and priority level. End your email with: "Reply APPROVE and I'll have Scribe draft the proposal within the hour."
-
-After composing your assessment, send it via gog gmail send from steward@stewardshipcomputellc.com to bobby.owen@stewardshipcomputellc.com with subject: "New Lead: ${lead.name} — ${lead.service}"`
-}
-
 function buildFallbackBody(lead: LeadData, timestamp: string): string {
   return `🌱 New Lead — Stewardship Compute\n\nName: ${lead.name}\nEmail: ${lead.email}\nOrg: ${lead.org || 'N/A'}\nService: ${lead.service}\nSummary: ${lead.summary}\nTime: ${timestamp}\n\nReply APPROVE to begin outreach.`
 }
 
-async function sendToOpenClaw(lead: LeadData, timestamp: string): Promise<void> {
-  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN
+async function sendEmailNotification(lead: LeadData, timestamp: string): Promise<void> {
+  const resendApiKey = process.env.RESEND_API_KEY
+  const notifyEmail = process.env.NOTIFY_EMAIL || 'bobby.owen@stewardshipcomputellc.com'
 
-  if (!gatewayToken) {
-    throw new Error('OPENCLAW_GATEWAY_TOKEN is not configured')
+  if (!resendApiKey) {
+    throw new Error('RESEND_API_KEY is not configured')
   }
 
-  const response = await fetch(OPENCLAW_GATEWAY_URL, {
+  const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${gatewayToken}`,
+      Authorization: `Bearer ${resendApiKey}`,
     },
     body: JSON.stringify({
-      agent: 'steward',
-      message: buildGatewayMessage(lead, timestamp),
+      from: 'Steward <activate@stewardshipcomputellc.com>',
+      to: notifyEmail,
+      subject: `New Lead: ${lead.name} — ${lead.service}`,
+      text: `New lead received at ${timestamp}\n\nName: ${lead.name}\nEmail: ${lead.email}\nOrg: ${lead.org || 'N/A'}\nService: ${lead.service}\nSummary: ${lead.summary}\nBudget: ${lead.budget || 'N/A'}\nTimeline: ${lead.timeline || 'N/A'}`,
     }),
-    signal: AbortSignal.timeout(8000),
   })
 
   if (!response.ok) {
     const body = await response.text()
-    throw new Error(`OpenClaw gateway returned ${response.status}: ${body}`)
+    throw new Error(`Resend returned ${response.status}: ${body}`)
   }
 }
 
@@ -158,7 +140,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
   const timestamp = formatTimestampCST()
   let persistenceSucceeded = false
   let notificationSucceeded = false
-  let gatewayMessage = 'OpenClaw gateway request failed'
+  let notificationMessage = 'Resend notification failed'
   let fallbackMessage = 'Fallback Telegram notification failed'
 
   try {
@@ -169,12 +151,12 @@ export const handler: Handler = async (event: HandlerEvent) => {
   }
 
   try {
-    await sendToOpenClaw(lead, timestamp)
+    await sendEmailNotification(lead, timestamp)
     notificationSucceeded = true
-  } catch (gatewayError) {
-    console.error('[submit-lead] OpenClaw gateway error:', gatewayError)
-    gatewayMessage =
-      gatewayError instanceof Error ? gatewayError.message : 'OpenClaw gateway request failed'
+  } catch (notificationError) {
+    console.error('[submit-lead] Resend notification error:', notificationError)
+    notificationMessage =
+      notificationError instanceof Error ? notificationError.message : 'Resend notification failed'
 
     try {
       await sendTelegramFallbackNotification(lead, timestamp)
@@ -189,7 +171,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
   if (!persistenceSucceeded && !notificationSucceeded) {
     return {
       statusCode: 502,
-      body: `Supabase persistence failed; ${gatewayMessage}; Telegram fallback failed: ${fallbackMessage}`,
+      body: `Supabase persistence failed; ${notificationMessage}; Telegram fallback failed: ${fallbackMessage}`,
     }
   }
 
