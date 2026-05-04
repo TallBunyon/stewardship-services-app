@@ -156,32 +156,40 @@ export const handler: Handler = async (event: HandlerEvent) => {
   }
 
   const timestamp = formatTimestampCST()
-  let forwarded = false
+  let persistenceSucceeded = false
+  let notificationSucceeded = false
+  let gatewayMessage = 'OpenClaw gateway request failed'
+  let fallbackMessage = 'Fallback Telegram notification failed'
+
+  try {
+    await persistLeadToSupabase(lead)
+    persistenceSucceeded = true
+  } catch (supabaseError) {
+    console.error('[submit-lead] Supabase persistence error:', supabaseError)
+  }
 
   try {
     await sendToOpenClaw(lead, timestamp)
-    forwarded = true
+    notificationSucceeded = true
   } catch (gatewayError) {
     console.error('[submit-lead] OpenClaw gateway error:', gatewayError)
-    const gatewayMessage =
+    gatewayMessage =
       gatewayError instanceof Error ? gatewayError.message : 'OpenClaw gateway request failed'
 
     try {
       await sendTelegramFallbackNotification(lead, timestamp)
-      forwarded = true
+      notificationSucceeded = true
     } catch (fallbackError) {
-      const fallbackMessage =
+      fallbackMessage =
         fallbackError instanceof Error ? fallbackError.message : 'Fallback Telegram notification failed'
       console.error('[submit-lead] Telegram fallback error:', fallbackError)
-      return { statusCode: 502, body: `${gatewayMessage}; Telegram fallback failed: ${fallbackMessage}` }
     }
   }
 
-  if (forwarded) {
-    try {
-      await persistLeadToSupabase(lead)
-    } catch (supabaseError) {
-      console.error('[submit-lead] Supabase persistence error:', supabaseError)
+  if (!persistenceSucceeded && !notificationSucceeded) {
+    return {
+      statusCode: 502,
+      body: `Supabase persistence failed; ${gatewayMessage}; Telegram fallback failed: ${fallbackMessage}`,
     }
   }
 
