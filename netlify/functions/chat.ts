@@ -73,9 +73,9 @@ async function callOpenRouter(
 
 async function saveCompletedLead(chatTranscript: IncomingMessage[]): Promise<void> {
   const supabaseUrl = getEnv('SUPABASE_URL')
-  const supabaseAnonKey = getEnv('SUPABASE_ANON_KEY')
+  const supabaseServiceKey = getEnv('SUPABASE_SERVICE_ROLE_KEY')
 
-  if (!supabaseUrl || !supabaseAnonKey) {
+  if (!supabaseUrl || !supabaseServiceKey) {
     console.warn('[chat function] Supabase env vars are not configured; skipping lead save')
     return
   }
@@ -83,14 +83,14 @@ async function saveCompletedLead(chatTranscript: IncomingMessage[]): Promise<voi
   const response = await fetch(`${supabaseUrl}/rest/v1/inbound_leads`, {
     method: 'POST',
     headers: {
-      'apikey': supabaseAnonKey,
-      'Authorization': `Bearer ${supabaseAnonKey}`,
+      'apikey': supabaseServiceKey,
+      'Authorization': `Bearer ${supabaseServiceKey}`,
       'Content-Type': 'application/json',
       'Prefer': 'return=minimal',
     },
     body: JSON.stringify({
-      chat_transcript: chatTranscript,
-      status: 'unread',
+      transcript: JSON.stringify(chatTranscript),
+      source: 'steward-services',
     }),
   })
 
