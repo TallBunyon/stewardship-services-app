@@ -1,7 +1,8 @@
 import type { Handler, HandlerEvent } from '@netlify/functions'
 
-const MODEL = 'meta-llama/llama-3.3-70b-instruct:free'
+const MODEL = 'openai/gpt-4o-mini'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const MAX_RETRIES = 2
 
 const SYSTEM_PROMPT = 'You are Intake Steward, the first point of contact for Stewardship Compute LLC. Your goal is to qualify web design and AI workflow leads. Keep responses short and conversational. 1. Ask what they are trying to build. 2. Briefly explain that all revenue funds Node Zero (our October 2026 patent deadline for regenerative ecological-compute infrastructure). 3. Ask for their budget, timeline, and email address. 4. Once you have all info, conclude by saying exactly: "Thank you, Bobby will review this and reach out shortly." '
 
@@ -33,42 +34,61 @@ function getEnv(key: string): string | undefined {
   return netlifyValue || process.env[key]
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
 async function callOpenRouter(
   messages: IncomingMessage[],
   apiKey: string
 ): Promise<string> {
-  const response = await fetch(OPENROUTER_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://services.stewardshipcomputellc.com',
-      'X-Title': 'Stewardship Compute Services',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 300,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...messages,
-      ],
-    }),
-  })
+  let lastError = 'Unknown error'
 
-  if (!response.ok) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://services.stewardshipcomputellc.com',
+        'X-Title': 'Stewardship Compute Services',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 300,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          ...messages,
+        ],
+      }),
+    })
+
+    if (response.ok) {
+      const data: OpenRouterResponse = await response.json()
+      const content = data.choices?.[0]?.message?.content?.trim()
+
+      if (!content) {
+        throw new Error('OpenRouter returned an empty response')
+      }
+
+      return content
+    }
+
     const errorBody = (await response.json().catch(() => null)) as OpenRouterErrorResponse | null
-    const message = errorBody?.error?.message || `${response.status} ${response.statusText}`
-    throw new Error(`OpenRouter request failed: ${message}`)
+    lastError = errorBody?.error?.message || `${response.status} ${response.statusText}`
+
+    // Retry transient upstream errors (rate limits / 5xx); fail fast on others (e.g. 401/400)
+    const isTransient = response.status === 429 || response.status >= 500
+    if (!isTransient || attempt === MAX_RETRIES) {
+      throw new Error(`OpenRouter request failed: ${lastError}`)
+    }
+
+    const retryAfterHeader = Number(response.headers.get('retry-after'))
+    const backoffMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0
+      ? retryAfterHeader * 1000
+      : 500 * (attempt + 1)
+    await sleep(backoffMs)
   }
 
-  const data: OpenRouterResponse = await response.json()
-  const content = data.choices?.[0]?.message?.content?.trim()
-
-  if (!content) {
-    throw new Error('OpenRouter returned an empty response')
-  }
-
-  return content
+  throw new Error(`OpenRouter request failed: ${lastError}`)
 }
 
 async function saveCompletedLead(chatTranscript: IncomingMessage[]): Promise<void> {
