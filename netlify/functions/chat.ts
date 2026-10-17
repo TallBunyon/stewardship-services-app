@@ -1,4 +1,5 @@
 import type { Handler, HandlerEvent } from '@netlify/functions'
+import { persistLead, resolveLeadsBackend, saveLeadToWorker } from '../lib/leads-backend'
 
 const MODEL = 'openai/gpt-4o-mini'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -91,7 +92,7 @@ async function callOpenRouter(
   throw new Error(`OpenRouter request failed: ${lastError}`)
 }
 
-async function saveCompletedLead(chatTranscript: IncomingMessage[]): Promise<void> {
+async function saveCompletedLeadToSupabase(chatTranscript: IncomingMessage[]): Promise<void> {
   const supabaseUrl = getEnv('SUPABASE_URL')
   const supabaseServiceKey = getEnv('SUPABASE_SERVICE_ROLE_KEY')
 
@@ -118,6 +119,20 @@ async function saveCompletedLead(chatTranscript: IncomingMessage[]): Promise<voi
     const body = await response.text().catch(() => '')
     throw new Error(`Supabase lead save failed: ${response.status} ${body}`.trim())
   }
+}
+
+// LEADS_BACKEND = supabase (default) | dual | worker. See netlify/lib/leads-backend.ts.
+async function saveCompletedLead(chatTranscript: IncomingMessage[]): Promise<void> {
+  await persistLead({
+    backend: resolveLeadsBackend(getEnv('LEADS_BACKEND')),
+    saveToSupabase: () => saveCompletedLeadToSupabase(chatTranscript),
+    saveToWorker: () =>
+      saveLeadToWorker(
+        { transcript: JSON.stringify(chatTranscript), source: 'steward-services' },
+        { url: getEnv('LEADS_API_URL'), secret: getEnv('LEADS_API_SECRET') }
+      ),
+    logPrefix: '[chat function]',
+  })
 }
 
 export const handler: Handler = async (event: HandlerEvent) => {
