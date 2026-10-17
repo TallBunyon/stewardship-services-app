@@ -20,3 +20,7 @@ leads/
 *.sql
 # ...but keep Worker D1 schema migrations tracked
 !workers/*/migrations/*.sql
+# ...and keep the app's existing SQL folders (Supabase migrations, seeds) tracked,
+# so a hotfix migration during the freeze is never silently ignored (COO fix 2026-10-17).
+!supabase/**/*.sql
+!netlify/supabase/*.sql
