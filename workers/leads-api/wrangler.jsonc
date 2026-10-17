@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "services-leads-api",
+  "main": "src/index.ts",
+  // Must not be newer than the workerd bundled with the pinned wrangler (4.147.0 -> workerd 1.20261001.1).
+  "compatibility_date": "2026-10-01",
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "services-leads",
+      // Placeholder. SV-2 replaces it with the id printed by `wrangler d1 create services-leads`.
+      // A D1 database id is an identifier, not a credential, so the real one may be committed.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    // "true" makes POST /leads return 503 + Retry-After (reads and PATCH keep working).
+    "LEADS_WRITE_PAUSED": "false",
+    // "false" = validate exactly like the live Supabase anon INSERT policy (name + valid email required).
+    // "true"  = also accept transcript-only leads (no name, no email) — the shape chat.ts writes today.
+    // See README "Open questions" #1: decide before dual write.
+    "LEADS_ALLOW_TRANSCRIPT_ONLY": "false"
+  },
+  // Value is set with `wrangler secret put LEADS_API_SECRET` (never in this file).
+  "secrets": {
+    "required": ["LEADS_API_SECRET"]
+  }
+}

@@ -1,0 +1,3 @@
+# Copy to .dev.vars for `wrangler dev`. Names only — never commit real values.
+# .dev.vars is gitignored.
+LEADS_API_SECRET=
