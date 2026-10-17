@@ -1,0 +1,84 @@
+# SV-1 backend CI: tests for the leads-api Worker and the Netlify functions,
+# plus a gitleaks secret scan of the full history. Runs on pushes to backend/**.
+# Nothing here deploys anything.
+name: backend-ci
+
+on:
+  push:
+    branches:
+      - 'backend/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WRANGLER_SEND_METRICS: 'false'
+
+jobs:
+  worker-tests:
+    name: leads-api Worker (vitest in workerd + typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: workers/leads-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: workers/leads-api/package-lock.json
+      - run: npm ci
+      - name: Generate runtime + Env types (wrangler types, offline)
+        run: npm run types
+      - run: npm run typecheck
+      - run: npm test
+
+  netlify-tests:
+    name: Netlify functions + sync-leads (vitest, fetch mocked)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  gitleaks:
+    name: gitleaks secret scan (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: v8.30.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      # go install verifies the module against sum.golang.org, so the pinned
+      # version cannot be swapped underneath us.
+      - name: Install gitleaks ${{ env.GITLEAKS_VERSION }}
+        run: |
+          go install "github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Scan git history
+        run: gitleaks git --redact --verbose --exit-code 1 .
+      - name: Scan working tree
+        run: gitleaks dir --redact --verbose --exit-code 1 .
