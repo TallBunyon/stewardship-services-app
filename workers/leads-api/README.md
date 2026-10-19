@@ -3,7 +3,8 @@
 Package **SV-1** of the Supabase → Cloudflare move for `services.stewardshipcomputellc.com`
 (the homepage chat widget that captures leads).
 
-**Status (2026-10-17):** built and tested on branch `backend/cloudflare`. Not merged, no pull
+**Status (2026-10-19):** built and tested on branch `backend/cloudflare`, including the SOC 2
+security layer (package **SEC-SV**, [section 5](#5-security-layer-sec-sv)). Not merged, no pull
 request, nothing deployed, no remote Cloudflare or Supabase resources touched.
 **Merging this changes nothing live:** with `LEADS_BACKEND` unset, the Netlify functions
 send the same Supabase requests as before (the tests check this).
@@ -11,6 +12,7 @@ send the same Supabase requests as before (the tests check this).
 | Package | Where | What | When |
 |---|---|---|---|
 | SV-1 | this branch | Worker, D1 schema, `LEADS_BACKEND` switch, tests, CI | done |
+| SEC-SV | this branch | audit log, logging hygiene, CI security gates, `form-data` fix, token scope doc | done |
 | SV-2 | owner's machine | create D1, deploy Worker, import 5 rows, turn on `dual` | ~2026-10-22 |
 | switch | Netlify env | `LEADS_BACKEND=worker` after 7 days of dual write | ~2026-10-29 |
 | last | Supabase | remove the Supabase project | after the switch |
@@ -37,7 +39,8 @@ cross-origin.
 Status codes: `400` validation or bad query (`{"error","details":[...]}`), `401` missing or
 wrong secret (with `WWW-Authenticate: Bearer`), `405` wrong method (with `Allow`), `413` body
 over 256 KiB, `415` body that is not JSON, `500` if `LEADS_API_SECRET` is unset (fails
-closed: every route is refused), `503` paused.
+closed: every route is refused) or if an admin read/write cannot be audited
+(`audit_unavailable`), `503` paused. Every response carries an `X-Request-Id` header.
 
 **Auth:** SHA-256 both values, then `crypto.subtle.timingSafeEqual`. This is a constant-time
 check that hides both the content and the length of the secret (as the Cloudflare docs
@@ -103,10 +106,14 @@ and `main()` runs only when the file is executed directly.
 
 ### CI: `.github/workflows/backend-ci.yml`
 
-Runs on pushes to `backend/**` (and on manual dispatch), with `contents: read` only:
+Runs on pushes to `backend/**`, which includes `backend/cloudflare` (also listed explicitly),
+and on manual dispatch, with `contents: read` only:
 
-- `worker-tests`: Worker tests and typecheck.
+- `worker-tests`: `npm audit --omit=dev --audit-level=high` (fails the job on any high or
+  critical runtime advisory), Worker tests and typecheck.
 - `netlify-tests`: function and script tests and typecheck.
+- `root-app`: `npm audit --omit=dev --audit-level=high` for the site's runtime dependencies,
+  then the site build (`tsc && vite build`).
 - `gitleaks`: v8.30.1 installed with `go install` (checksum verified against
   sum.golang.org), scanning the full git history and the working tree.
 
@@ -124,14 +131,19 @@ tests/                             vitest for the functions and the script (sepa
 workers/leads-api/
   wrangler.jsonc                   Worker config (database_id is a placeholder until SV-2)
   migrations/0001_*.sql            D1 schema
+  migrations/0002_audit_events.sql append-only audit log (SEC-A)
   src/index.ts, src/validate.ts    Worker
-  test/                            vitest-in-workerd tests
+  src/audit.ts                     audit append + verifyChain (SEC-A)
+  src/log.ts                       structured JSON logs (SEC-K)
+  test/leads.test.ts               SV-1 behaviour tests
+  test/audit.test.ts               SEC-SV tests (audit rows, chain, no-leak scan)
   .dev.vars.example                secret names for `wrangler dev`
 ```
 
 `tests/` is its own npm package on purpose. Adding vitest to the root `package.json` bumped
 `postcss`, `nanoid`, `source-map-js` and `tinyglobby` in the root lockfile, which the live
-site build uses. The root `package.json` and `package-lock.json` are untouched.
+site build uses. The root `package.json` is untouched. The root `package-lock.json` changed
+only in SEC-SV, for the `form-data` runtime advisory (two entries, see section 5).
 `npm run build` at the root still passes, and both functions still bundle with esbuild.
 
 ---
@@ -162,14 +174,14 @@ npm run typecheck
 npm test
 ```
 
-Results from a fresh clone of `backend/cloudflare` on 2026-10-17 (Node 22.22.0, npm 10.9.4).
-Both typechecks were clean:
+Results on `backend/cloudflare` with SEC-SV on 2026-10-19 (Node 22.22.0, npm 10.9.4). Both
+typechecks were clean:
 
 ```
 workers/leads-api  $ npm test
  RUN  v4.1.11 .../workers/leads-api
- Test Files  1 passed (1)
-      Tests  85 passed (85)
+ Test Files  2 passed (2)
+      Tests  119 passed (119)      # leads.test.ts 85 (SV-1) + audit.test.ts 34 (SEC-SV)
 
 tests  $ npm test
  RUN  v4.1.11 .../tests
@@ -197,6 +209,25 @@ What they cover:
   - the `wrangler.jsonc` defaults through `exports.default.fetch`;
   - migration behaviour for the import: imported ids are kept and the next id continues
     after them, and the defaults and CHECK constraints work.
+- **Worker, SEC-SV (34, `test/audit.test.ts`):**
+  - each event type writes exactly one audit row with the right action, result, actor and
+    target (lead create accepted, validation-rejected, bad body, paused; admin list ok and
+    bad query; admin patch ok, 404 and bad id; unsupported method (a method outside the
+    known list is recorded as `OTHER`); missing, wrong and
+    non-Bearer secret on all three routes, each with 401; unset server secret);
+  - an unknown path writes no row; the user agent is truncated;
+  - 12 concurrent requests each get one row and the chain stays linear;
+  - audit outage: lead create still returns 201 (fail open), admin list and patch return 500
+    with no data (fail closed);
+  - `verifyChain` passes on an empty and on a clean log (also across page boundaries), and
+    fails on an altered row, on a forged row with a recomputed hash, and on a deleted row;
+    the database refuses `UPDATE` and `DELETE` on `audit_events`;
+  - a scan of every audit row and every captured log line finds neither the secret
+    (generated at test time) nor the lead's email, phone or name, and every request log line
+    has `request_id`, `route`, `status` and `duration_ms`.
+  - These tests were mutation-checked: logging the `Authorization` header, putting the email
+    in the audit target, skipping the hash check in `verifyChain`, and disabling the chain
+    retry each made them fail.
 - **tests/ (47):**
   - for each of `chat.ts` and `submit-lead.ts`: all three modes;
   - the Supabase request (URL, method, headers, JSON body) is unchanged in `supabase` and
@@ -249,7 +280,7 @@ ones.
 2. **Apply the schema.**
    ```sh
    npx wrangler d1 migrations apply services-leads --remote
-   npx wrangler d1 execute services-leads --remote --command "SELECT name FROM sqlite_master WHERE type IN ('table','index')"
+   npx wrangler d1 execute services-leads --remote --command "SELECT type, name FROM sqlite_master WHERE type IN ('table','index','trigger')"
    ```
 3. **Export the existing Supabase rows (5 as of 2026-10-17)** as D1-ready SQL. Run this
    read-only SELECT in the Supabase SQL editor and save the single output value as
@@ -325,6 +356,10 @@ ones.
     - Watch the Worker logs: `npx wrangler tail`, or the dashboard (observability is on).
     - Compare counts daily: Supabase `count(*)` against
       `npx wrangler d1 execute services-leads --remote --command "SELECT COUNT(*) FROM inbound_leads"`.
+    - Audit log at a glance:
+      `npx wrangler d1 execute services-leads --remote --command "SELECT action, result, COUNT(*) AS n FROM audit_events GROUP BY action, result"`.
+      A burst of `auth.refused` rows means something is probing the Worker or a caller has a
+      stale secret.
 
 **Local `.env` for `sync-leads`:** during dual, keep reading Supabase (leave `LEADS_BACKEND`
 unset or `dual`). At the switch, add `LEADS_BACKEND=worker`, `LEADS_API_URL` and
@@ -350,6 +385,174 @@ unset or `dual`). At the switch, add `LEADS_BACKEND=worker`, `LEADS_API_URL` and
   3. Set `LEADS_BACKEND=worker` in Netlify and in the local `.env`, then redeploy.
 - **Remove Supabase last,** once `worker` has run cleanly. Delete
   `netlify/supabase/create_inbound_leads.sql` and the Supabase code paths then.
+
+---
+
+## 5. Security layer (SEC-SV)
+
+Retrofit of the SOC 2-ready practice approved 2026-10-17: audit log, logging hygiene and CI
+security gates before the backend goes live. Built 2026-10-19 on `backend/cloudflare`.
+Nothing here changes what the Netlify functions send or what the site does; the dual-write
+switch still defaults to `supabase`.
+
+### SEC-A: audit log (`audit_events`)
+
+`migrations/0002_audit_events.sql` adds an append-only table:
+`id, ts, request_id, actor, action, target, result, ip, user_agent, prev_hash, row_hash`.
+
+- **Append-only twice over.** The Worker only ever `INSERT`s into it (no route updates or
+  deletes audit rows), and two triggers make the database itself abort any `UPDATE` or
+  `DELETE` on the table.
+- **Hash chain.** `row_hash` = hex SHA-256 of `prev_hash`, a newline, and the JSON array
+  `[id, ts, request_id, actor, action, target, result, ip, user_agent]`. The first row's
+  `prev_hash` is 64 zeros. The Worker assigns `id` = previous id + 1, so ids are gap-free.
+- **Concurrency.** `prev_hash` and `id` are both unique. Two requests that read the same
+  chain head cannot both insert; the loser re-reads the head and retries (up to 8 tries,
+  jittered). The tests fire 12 concurrent requests and check the chain is still linear.
+- **`verifyChain(db)`** (`src/audit.ts`) walks the table in id order and reports
+  `{ok: true, rows, head_id, head_hash}` or `{ok: false, broken_at_id, reason}` for a
+  changed row, a forged row with a recomputed hash (caught at the next row), or a deleted
+  row (id gap).
+- **Rows hold IDs and codes only:** never lead content, names, emails, phone numbers, raw
+  paths or any secret. `target` for a refused request is the route template
+  (`PATCH /leads/:id`), never the raw path, because the path is caller-controlled.
+- `ip` is `CF-Connecting-IP` of the **caller** (Netlify's egress, or the owner's machine for
+  `sync-leads`), not of the person who wrote the lead. `user_agent` is cut to 256 characters.
+
+One row per event:
+
+| Event | `action` | `result` | `actor` | `target` |
+|---|---|---|---|---|
+| `POST /leads` stored | `lead.create` | `accepted` | `shared-secret` | `lead:<id>` |
+| `POST /leads` failed validation | `lead.create` | `rejected_validation` | `shared-secret` | null |
+| `POST /leads` body too large, not JSON or invalid JSON | `lead.create` | `rejected_body` | `shared-secret` | null |
+| `POST /leads` while `LEADS_WRITE_PAUSED` | `lead.create` | `rejected_paused` | `shared-secret` | null |
+| `GET /leads` (admin list; there is no single-lead read route) | `lead.list` | `ok` or `rejected_validation` | `shared-secret` | `leads:[<ids returned>]` |
+| `PATCH /leads/:id` | `lead.update` | `ok`, `not_found`, `rejected_validation` or `rejected_body` | `shared-secret` | `lead:<id>` (null for a non-numeric id) |
+| authenticated request with an unsupported method | `request.unsupported` | `rejected_method` | `shared-secret` | e.g. `DELETE /leads` |
+| missing secret (no header, not `Bearer`, or empty) | `auth.refused` | `refused_missing_secret` | `anonymous` | route template |
+| wrong secret (constant-time compare) | `auth.refused` | `refused_wrong_secret` | `anonymous` | route template |
+| `LEADS_API_SECRET` unset on the Worker | `auth.refused` | `refused_server_misconfigured` | `anonymous` | route template |
+| a handler throws after auth | that route's action | `error` | `shared-secret` | as far as known |
+
+Unknown paths (404 before auth) are logged, not audited. **Rate-limit trips:** none, because
+the Worker has no rate limiter (open question 7).
+
+**If the audit row cannot be written:**
+
+- `lead.create` **fails open**: the lead is stored and the caller gets `201`. An
+  `audit_write_failed` error is logged. A customer's lead is never lost because of auditing.
+- `lead.list` and `lead.update` **fail closed**: `500 {"error":"audit_unavailable"}` and no
+  lead data. An admin read that cannot be audited does not happen. For `PATCH`, the flag is
+  already set by then; a retry is harmless (same value) and gets its own row.
+
+**What the chain does not cover:**
+
+- Anyone with D1 write access (a token with D1 Edit, or the dashboard) can drop the triggers
+  and rewrite the whole chain consistently, or cut rows off the end. The anchor outside D1
+  is the log stream: every request log line carries `audit_id` and `audit_hash`. With
+  Logpush to R2 (account level, set up by the COO, not in this repo), compare the last logged
+  `audit_hash` with the head that `verifyChain` reports.
+- Changes made outside the Worker (`wrangler d1 execute`, such as the SV-2 import or the
+  switch-day `UPDATE`) never pass through the Worker, so they are not in `audit_events`.
+  Cloudflare's account audit log records those API calls.
+- `verifyChain` runs in the tests. A route or script that runs it against the remote
+  database is not built yet (follow-up).
+
+### SEC-K: logging hygiene
+
+- One JSON line per request (`src/log.ts`), which Workers Logs indexes field by field:
+  `{"level":"info","event":"request","request_id","route","status","duration_ms","audit_id","audit_hash"}`.
+- Other events: `audit_write_failed`, `unhandled_error`, `server_misconfigured` (level
+  `error`), each with `request_id` and `route`.
+- `route` is a template (`PATCH /leads/:id`, `GET (unmatched)`). Logs never hold raw paths,
+  query strings, headers, request or response bodies, lead fields, or secrets. The tests
+  capture every console line and scan it, and every audit row, for the secret, the lead's
+  email, phone and name.
+- `request_id` is a random UUID per request, also returned as `X-Request-Id`.
+- `"observability": { "enabled": true }` is set in `wrangler.jsonc` (it was already on).
+  Logpush to R2 is account-level and done separately by the COO.
+- **Finding, not changed here:** the Netlify functions log upstream error bodies
+  (`Supabase lead save failed: <status> <body>`). For a Postgres constraint violation,
+  Supabase's body can include `Failing row contains (...)` with the lead's values. Those log
+  lines must stay byte-identical in `supabase` mode until the switch, so trimming them is a
+  follow-up for after the switch.
+
+### SEC-J: CI gates
+
+See [CI](#ci-githubworkflowsbackend-ciyml): `gitleaks` (history and working tree),
+`npm audit --omit=dev --audit-level=high` for the Worker and for the root app's runtime
+dependencies (the job fails on any high or critical advisory), and the root site build.
+
+### Dependency advisories
+
+**Fixed: `form-data` (high, runtime, root `package-lock.json`).** GHSA-hmw2-7cc7-3qxx, CRLF
+injection, affects 4.0.0 to 4.0.5. Path: `@anthropic-ai/sdk 0.39.0` → `@types/node-fetch
+2.6.13` → `form-data ^4.0.4`. `npm update form-data` moved it **4.0.5 → 4.0.6** inside the
+existing range, and its dependency `hasown` 2.0.2 → 2.0.4. No other lockfile entry changed,
+`package.json` is untouched, and no `--force` was used. After the fix,
+`npm audit --omit=dev` reports `found 0 vulnerabilities` for the root and for the Worker.
+
+**Still open, dev-only (build and test tooling, not in the deployed functions or the
+browser bundle).** Not fixed here: the root ones change the live site's build toolchain,
+and the Worker ones change the pinned test toolchain three days before D-day.
+
+| Where | Package (installed) | Advisory range | Fix it needs |
+|---|---|---|---|
+| root | `vite` 5.4.21 | ≤ 6.4.2 | **major**: vite 6.4.3+ (npm audit proposes 8.3.4), with a matching `@vitejs/plugin-react` |
+| root | `postcss` 8.5.8 | ≤ 8.5.22 | 8.5.23+, in range: `npm audit fix` (no `--force`) |
+| root | `nanoid` 3.3.11 (via postcss) | ≤ 3.3.17 | 3.3.18+ (latest 3.x is 3.3.20), in range: `npm audit fix` |
+| root | `browserslist` 4.28.2 | ≤ 4.28.6 | 4.28.7+, in range: `npm audit fix` |
+| root | `source-map-js` 1.2.1 | 1.0.0 to 1.2.1 | 1.2.2, in range: `npm audit fix` |
+| root | `braces` 3.0.3 (via `tailwindcss` 3 → `chokidar`, `micromatch`; also flags `fast-glob`, `micromatch`, `chokidar`, `tailwindcss`) | all versions | no fixed `braces`; only **major** `tailwindcss` 4 drops the chain |
+| Worker | `sharp` (via `miniflare`, used by `wrangler` and `@cloudflare/vitest-plugin`) | < 0.35.5 | bump the exact pins: `wrangler` 4.147.0 → 4.149+ (npm proposes 4.151.2) and `@cloudflare/vitest-plugin` 1.3.6 → 1.3.8+ (proposes 1.4.5); re-check `compatibility_date` |
+
+The in-range root fixes are one `npm audit fix` without `--force`, then `npm run build` and a
+look at the site. That is best done as its own change after D-day.
+
+### SEC-H: Cloudflare API token for this Worker
+
+For automation, or for any deploy that is not the owner's interactive `wrangler login`.
+Names only; values never go into the repo. Create **account-owned** tokens (Manage Account →
+Account API Tokens): Wrangler only honours granular permissions with account-owned tokens.
+Give Wrangler `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the environment, so it
+does not need to list accounts.
+
+**Token 1, `services-leads-api deploy`:**
+
+| Setting | Value |
+|---|---|
+| Workers | scope **Specified Workers** → `services-leads-api`, role **Editor** |
+| Everything else | none: no zone, DNS, routes, account settings, user, R2, KV or Logpush permissions |
+| TTL | start today, **end date at most 90 days out** (tokens never expire unless you set an end date) |
+| Client IP address filtering | **Is in** the deploying machine or CI egress range, if it is stable |
+
+Editor on that one Worker covers `wrangler deploy` of the **existing** Worker and its
+settings (vars, `observability`). The docs describe Editor as "update content and
+settings", which should include `wrangler secret put LEADS_API_SECRET`; that mapping was not
+confirmed, so check it on first use. Editor cannot create or delete Workers: that needs
+Admin at the Workers product scope. SV-2's first deploy creates
+the Worker, so it stays on the owner's `wrangler login`. Fallback if the per-Worker scope
+returns `403 code 10000` (reported by some users in 2026-09/10): account permission
+**Workers Scripts: Edit**. That is broader, because it covers every Worker in the account.
+
+**Token 2, `services-leads D1 migrations`, created only when a migration or `d1 execute`
+is due:**
+
+| Setting | Value |
+|---|---|
+| Account permission | **D1: Edit** (use **D1: Read** for read-only checks such as counting rows) |
+| TTL | **end date the same or next day**; delete it after the run |
+| Client IP address filtering | the owner's machine |
+
+As of 2026-10-19, API tokens have no per-database D1 scope (Cloudflare's blog lists D1
+resource scopes as coming next), so D1 Edit reaches every D1 database in the account. That is why it is a separate,
+short-lived token. Neither token needs **Workers Tail** (use the dashboard's Workers Logs).
+
+Source: Cloudflare's docs on Workers roles and permissions, on restricting tokens (TTL and
+IP filtering), and the 2026-09-15 changelog on per-Worker permissions. They were read via
+search summaries on 2026-10-19, because `developers.cloudflare.com` was blocked from the
+build session. Check the exact labels in the dashboard when creating the tokens.
 
 ---
 
@@ -403,7 +606,9 @@ unset or `dual`). At the switch, add `LEADS_BACKEND=worker`, `LEADS_API_URL` and
    - Pin the GitHub Actions to commit SHAs. The SHAs could not be resolved from this
      session.
    - The Worker has no rate limiting. It relies on the bearer secret, since it is server to
-     server only.
+     server only. Since SEC-SV every refused request also writes an audit row, so a flood of
+     unauthenticated requests now costs D1 writes as well; a Workers rate-limit binding in
+     front of auth (with its own `rate_limit.trip` audit row) is the fix. See section 5.
 8. **Pre-existing on `main`, not changed here:**
    - `chat.ts` and `submit-lead.ts` hard-code the owner's address as the `NOTIFY_EMAIL`
      fallback in this public repo. Removing it changes live behaviour if `NOTIFY_EMAIL` is
