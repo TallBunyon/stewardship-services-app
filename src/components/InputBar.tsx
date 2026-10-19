@@ -69,7 +69,15 @@ export default function InputBar({ onSend, disabled, appState }: Props) {
         </button>
       </div>
       <p className="mt-2 text-center text-[10px] uppercase tracking-[0.16em] text-white/22">
-        Shift+Enter for new line · Enter to send
+        Shift+Enter for new line · Enter to send ·{' '}
+        <a
+          href="https://stewardshipcomputellc.com/privacy"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-white/60 underline underline-offset-2 hover:text-white/85"
+        >
+          Privacy
+        </a>
       </p>
     </div>
   )
