@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin'
 import { defineConfig } from 'vitest/config'
@@ -13,8 +14,8 @@ export default defineConfig({
           bindings: {
             // Test-only binding so the setup file can apply the real migrations.
             TEST_MIGRATIONS: migrations,
-            // Test-only placeholder; the real value is set with `wrangler secret put`.
-            LEADS_API_SECRET: 'test-only-placeholder-secret',
+            // Obvious dummy generated per run; the real value is set with `wrangler secret put`.
+            LEADS_API_SECRET: `dummy-test-secret-${randomUUID()}`,
           },
         },
       }

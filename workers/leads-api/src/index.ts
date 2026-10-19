@@ -7,13 +7,39 @@
 //
 // Server-to-server only (called from Netlify functions and scripts/sync-leads.js).
 // No CORS headers are sent, so browsers cannot call it cross-origin.
+//
+// Every response carries X-Request-Id. Each authenticated request on a /leads route and each
+// request refused for its secret writes exactly one audit_events row (src/audit.ts), and each
+// request writes one structured log line (src/log.ts).
 
+import { appendAuditEvent, USER_AGENT_MAX_LENGTH, type AuditRow } from './audit'
+import { errorMessage, logEvent } from './log'
 import { validateLead } from './validate'
 
 export const MAX_BODY_BYTES = 256 * 1024
 export const PAUSED_RETRY_AFTER_SECONDS = 300
 const DEFAULT_LIST_LIMIT = 100
 const MAX_LIST_LIMIT = 500
+
+const AUTHENTICATED_ACTOR = 'shared-secret'
+const ANONYMOUS_ACTOR = 'anonymous'
+
+// The audit row a request will write. Handlers fill in result and target as they go; a
+// handler that throws leaves result 'error'.
+interface AuditDraft {
+  actor: string
+  action: string
+  target: string | null
+  result: string
+  // Admin reads and writes return 500 instead of data when their row cannot be written.
+  failClosed: boolean
+}
+
+interface RequestContext {
+  requestId: string
+  route: string
+  audit: AuditDraft | null
+}
 
 interface LeadRow {
   id: number
@@ -53,11 +79,24 @@ async function secretsMatch(provided: string, expected: string): Promise<boolean
   return crypto.subtle.timingSafeEqual(a, b)
 }
 
-async function isAuthorized(request: Request, secret: string): Promise<boolean> {
+type AuthOutcome = 'ok' | 'missing_secret' | 'wrong_secret'
+
+async function authenticate(request: Request, secret: string): Promise<AuthOutcome> {
   const header = request.headers.get('Authorization') ?? ''
-  const match = /^Bearer\s+(.+)$/i.exec(header)
-  if (!match) return false
-  return secretsMatch(match[1].trim(), secret)
+  const provided = /^Bearer\s+(.+)$/i.exec(header)?.[1].trim() ?? ''
+  if (provided === '') return 'missing_secret'
+  return (await secretsMatch(provided, secret)) ? 'ok' : 'wrong_secret'
+}
+
+const KNOWN_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+
+// Route template for logs and audit targets. Never the raw path or a custom method: both
+// are caller-controlled and could carry anything.
+function routeName(requestMethod: string, url: URL): string {
+  const method = KNOWN_METHODS.has(requestMethod) ? requestMethod : 'OTHER'
+  if (url.pathname === '/leads') return `${method} /leads`
+  if (/^\/leads\/[^/]+$/.test(url.pathname)) return `${method} /leads/:id`
+  return `${method} (unmatched)`
 }
 
 async function readJsonBody(
@@ -85,8 +124,9 @@ async function readJsonBody(
   }
 }
 
-async function createLead(request: Request, env: Env): Promise<Response> {
+async function createLead(request: Request, env: Env, audit: AuditDraft): Promise<Response> {
   if (env.LEADS_WRITE_PAUSED === 'true') {
+    audit.result = 'rejected_paused'
     return json(
       503,
       { error: 'writes_paused' },
@@ -95,12 +135,16 @@ async function createLead(request: Request, env: Env): Promise<Response> {
   }
 
   const body = await readJsonBody(request)
-  if (!body.ok) return body.response
+  if (!body.ok) {
+    audit.result = 'rejected_body'
+    return body.response
+  }
 
   const result = validateLead(body.value, {
     allowTranscriptOnly: env.LEADS_ALLOW_TRANSCRIPT_ONLY === 'true',
   })
   if (!result.ok) {
+    audit.result = 'rejected_validation'
     return json(400, { error: 'validation_failed', details: result.errors })
   }
 
@@ -123,6 +167,8 @@ async function createLead(request: Request, env: Env): Promise<Response> {
 
   if (!row) throw new Error('insert returned no row')
 
+  audit.result = 'accepted'
+  audit.target = `lead:${row.id}`
   return json(201, { id: row.id }, { Location: `/leads/${row.id}` })
 }
 
@@ -131,7 +177,7 @@ function parseNonNegativeInt(value: string): number | null {
   return Number(value)
 }
 
-async function listLeads(url: URL, env: Env): Promise<Response> {
+async function listLeads(url: URL, env: Env, audit: AuditDraft): Promise<Response> {
   const params = url.searchParams
   const errors: string[] = []
 
@@ -162,7 +208,10 @@ async function listLeads(url: URL, env: Env): Promise<Response> {
     else afterId = parsed
   }
 
-  if (errors.length > 0) return json(400, { error: 'invalid_query', details: errors })
+  if (errors.length > 0) {
+    audit.result = 'rejected_validation'
+    return json(400, { error: 'invalid_query', details: errors })
+  }
 
   const statement =
     downloaded === null
@@ -177,15 +226,29 @@ async function listLeads(url: URL, env: Env): Promise<Response> {
   const leads = results.map(toApiLead)
   const nextAfterId = leads.length === limit ? leads[leads.length - 1].id : null
 
+  audit.result = 'ok'
+  audit.target = `leads:[${leads.map((lead) => lead.id).join(',')}]`
   return json(200, { leads, next_after_id: nextAfterId })
 }
 
-async function updateLead(idParam: string, request: Request, env: Env): Promise<Response> {
+async function updateLead(
+  idParam: string,
+  request: Request,
+  env: Env,
+  audit: AuditDraft
+): Promise<Response> {
   const id = parseNonNegativeInt(idParam)
-  if (id === null || id < 1) return json(400, { error: 'invalid_id' })
+  if (id === null || id < 1) {
+    audit.result = 'rejected_validation'
+    return json(400, { error: 'invalid_id' })
+  }
+  audit.target = `lead:${id}`
 
   const body = await readJsonBody(request)
-  if (!body.ok) return body.response
+  if (!body.ok) {
+    audit.result = 'rejected_body'
+    return body.response
+  }
 
   const value = body.value
   if (
@@ -195,6 +258,7 @@ async function updateLead(idParam: string, request: Request, env: Env): Promise<
     Object.keys(value).length !== 1 ||
     typeof (value as Record<string, unknown>).downloaded !== 'boolean'
   ) {
+    audit.result = 'rejected_validation'
     return json(400, {
       error: 'validation_failed',
       details: ['body must be exactly { "downloaded": true | false }'],
@@ -208,44 +272,145 @@ async function updateLead(idParam: string, request: Request, env: Env): Promise<
     .bind(downloaded, id)
     .first<LeadRow>()
 
-  if (!row) return json(404, { error: 'not_found' })
+  if (!row) {
+    audit.result = 'not_found'
+    return json(404, { error: 'not_found' })
+  }
+  audit.result = 'ok'
   return json(200, { lead: toApiLead(row) })
 }
 
-async function route(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url)
+function authenticatedAudit(action: string, failClosed: boolean): AuditDraft {
+  return { actor: AUTHENTICATED_ACTOR, action, target: null, result: 'error', failClosed }
+}
+
+async function route(request: Request, url: URL, env: Env, ctx: RequestContext): Promise<Response> {
   const itemMatch = /^\/leads\/([^/]+)$/.exec(url.pathname)
   const isCollection = url.pathname === '/leads'
 
   if (!isCollection && !itemMatch) return json(404, { error: 'not_found' })
 
   if (!env.LEADS_API_SECRET) {
-    console.error('[leads-api] LEADS_API_SECRET is not configured; refusing all requests')
+    logEvent('error', {
+      event: 'server_misconfigured',
+      request_id: ctx.requestId,
+      route: ctx.route,
+      detail: 'LEADS_API_SECRET is not configured; refusing all requests',
+    })
+    ctx.audit = {
+      actor: ANONYMOUS_ACTOR,
+      action: 'auth.refused',
+      target: ctx.route,
+      result: 'refused_server_misconfigured',
+      failClosed: false,
+    }
     return json(500, { error: 'server_misconfigured' })
   }
 
-  if (!(await isAuthorized(request, env.LEADS_API_SECRET))) {
+  const auth = await authenticate(request, env.LEADS_API_SECRET)
+  if (auth !== 'ok') {
+    ctx.audit = {
+      actor: ANONYMOUS_ACTOR,
+      action: 'auth.refused',
+      target: ctx.route,
+      result: `refused_${auth}`,
+      failClosed: false,
+    }
     return json(401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' })
   }
 
   if (isCollection) {
-    if (request.method === 'POST') return createLead(request, env)
-    if (request.method === 'GET') return listLeads(url, env)
-    return json(405, { error: 'method_not_allowed' }, { Allow: 'GET, POST' })
+    if (request.method === 'POST') {
+      // Fail open: a lead the caller sent is never refused because auditing failed.
+      ctx.audit = authenticatedAudit('lead.create', false)
+      return createLead(request, env, ctx.audit)
+    }
+    if (request.method === 'GET') {
+      ctx.audit = authenticatedAudit('lead.list', true)
+      return listLeads(url, env, ctx.audit)
+    }
+  } else if (request.method === 'PATCH') {
+    ctx.audit = authenticatedAudit('lead.update', true)
+    return updateLead(itemMatch![1], request, env, ctx.audit)
   }
 
-  if (request.method === 'PATCH') return updateLead(itemMatch![1], request, env)
-  return json(405, { error: 'method_not_allowed' }, { Allow: 'PATCH' })
+  ctx.audit = {
+    ...authenticatedAudit('request.unsupported', false),
+    target: ctx.route,
+    result: 'rejected_method',
+  }
+  return json(405, { error: 'method_not_allowed' }, { Allow: isCollection ? 'GET, POST' : 'PATCH' })
+}
+
+async function writeAudit(
+  request: Request,
+  env: Env,
+  draft: AuditDraft,
+  ctx: RequestContext
+): Promise<AuditRow> {
+  return appendAuditEvent(env.DB, {
+    ts: new Date().toISOString(),
+    request_id: ctx.requestId,
+    actor: draft.actor,
+    action: draft.action,
+    target: draft.target,
+    result: draft.result,
+    ip: request.headers.get('CF-Connecting-IP'),
+    user_agent: request.headers.get('User-Agent')?.slice(0, USER_AGENT_MAX_LENGTH) ?? null,
+  })
 }
 
 export default {
   async fetch(request, env, _ctx): Promise<Response> {
-    try {
-      return await route(request, env)
-    } catch (err) {
-      // Log the message only: never request bodies (they contain personal data).
-      console.error('[leads-api] unhandled error:', err instanceof Error ? err.message : String(err))
-      return json(500, { error: 'internal_error' })
+    const started = Date.now()
+    const url = new URL(request.url)
+    const ctx: RequestContext = {
+      requestId: crypto.randomUUID(),
+      route: routeName(request.method, url),
+      audit: null,
     }
+
+    let response: Response
+    try {
+      response = await route(request, url, env, ctx)
+    } catch (err) {
+      // Message only: never request bodies (they contain personal data).
+      logEvent('error', {
+        event: 'unhandled_error',
+        request_id: ctx.requestId,
+        route: ctx.route,
+        error: errorMessage(err),
+      })
+      response = json(500, { error: 'internal_error' })
+    }
+
+    let auditRow: AuditRow | null = null
+    if (ctx.audit) {
+      try {
+        auditRow = await writeAudit(request, env, ctx.audit, ctx)
+      } catch (err) {
+        logEvent('error', {
+          event: 'audit_write_failed',
+          request_id: ctx.requestId,
+          route: ctx.route,
+          action: ctx.audit.action,
+          result: ctx.audit.result,
+          error: errorMessage(err),
+        })
+        if (ctx.audit.failClosed) response = json(500, { error: 'audit_unavailable' })
+      }
+    }
+
+    response.headers.set('X-Request-Id', ctx.requestId)
+    logEvent('info', {
+      event: 'request',
+      request_id: ctx.requestId,
+      route: ctx.route,
+      status: response.status,
+      duration_ms: Date.now() - started,
+      audit_id: auditRow?.id ?? null,
+      audit_hash: auditRow?.row_hash ?? null,
+    })
+    return response
   },
 } satisfies ExportedHandler<Env>

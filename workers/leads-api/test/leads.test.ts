@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import worker, { MAX_BODY_BYTES, PAUSED_RETRY_AFTER_SECONDS } from '../src/index'
 import { LIMITS } from '../src/validate'
 
-// Matches the test-only binding in vitest.config.ts. Not a real secret.
-const SECRET = 'test-only-placeholder-secret'
+// The dummy generated per run in vitest.config.ts. Not a real secret.
+const SECRET = env.LEADS_API_SECRET
 const BASE = 'https://leads-api.test'
 
 type EnvOverrides = Partial<Record<keyof Env, unknown>>
