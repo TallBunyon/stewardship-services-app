@@ -1,11 +1,13 @@
-# SV-1 backend CI: tests for the leads-api Worker and the Netlify functions,
-# plus a gitleaks secret scan of the full history. Runs on pushes to backend/**.
-# Nothing here deploys anything.
+# Backend CI (SV-1 + SEC-SV): tests for the leads-api Worker and the Netlify functions,
+# a gitleaks secret scan of the full history, and npm audit gates that fail on any high or
+# critical advisory in runtime dependencies (Worker and root app). Runs on pushes to
+# backend/** (which includes backend/cloudflare). Nothing here deploys anything.
 name: backend-ci
 
 on:
   push:
     branches:
+      - 'backend/cloudflare'
       - 'backend/**'
   workflow_dispatch:
 
@@ -35,6 +37,8 @@ jobs:
           cache: npm
           cache-dependency-path: workers/leads-api/package-lock.json
       - run: npm ci
+      - name: npm audit (runtime dependencies, fail on high)
+        run: npm audit --omit=dev --audit-level=high
       - name: Generate runtime + Env types (wrangler types, offline)
         run: npm run types
       - run: npm run typecheck
@@ -57,6 +61,25 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  root-app:
+    name: root app (npm audit runtime deps + site build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      # Runtime dependencies only. The dev-only build-tool advisories (vite, postcss, ...)
+      # and their fixes are listed in workers/leads-api/README.md (SEC-SV).
+      - name: npm audit (runtime dependencies, fail on high)
+        run: npm audit --omit=dev --audit-level=high
+      - name: Site build (tsc + vite build)
+        run: npm run build
 
   gitleaks:
     name: gitleaks secret scan (full history)
