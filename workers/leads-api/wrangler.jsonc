@@ -22,11 +22,43 @@
     "LEADS_WRITE_PAUSED": "false",
     // "false" = validate exactly like the live Supabase anon INSERT policy (name + valid email required).
     // "true"  = also accept transcript-only leads (no name, no email) — the shape chat.ts writes today.
-    // See README "Open questions" #1: decide before dual write.
+    // This top-level default stays "false" on purpose (a test pins it). PRODUCTION runs with "true":
+    // see env.production below, and README "Open questions" #1.
     "LEADS_ALLOW_TRANSCRIPT_ONLY": "false"
   },
   // Value is set with `wrangler secret put LEADS_API_SECRET` (never in this file).
   "secrets": {
     "required": ["LEADS_API_SECRET"]
+  },
+  "env": {
+    // Production: deploy with `npx wrangler deploy --env production`. A bare `wrangler deploy`
+    // uses the top-level vars above (transcript-only "false") and would reject chat leads.
+    //
+    // Wrangler does not inherit `vars`, `secrets` or bindings (d1_databases) into an environment,
+    // so all three are repeated here. `name` is set to the top-level name: without it,
+    // `--env production` would deploy a different Worker called `services-leads-api-production`.
+    // main, compatibility_date and observability are inheritable and are not repeated.
+    "production": {
+      "name": "services-leads-api",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "services-leads",
+          // Placeholder. Keep identical to the top-level d1_databases entry: SV-2 sets both
+          // to the id printed by `wrangler d1 create services-leads`.
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "vars": {
+        "LEADS_WRITE_PAUSED": "false",
+        // COO decision 2026-10-17 (README "Open questions" #1): chat transcript-only leads are
+        // accepted in production.
+        "LEADS_ALLOW_TRANSCRIPT_ONLY": "true"
+      },
+      "secrets": {
+        "required": ["LEADS_API_SECRET"]
+      }
+    }
   }
 }

@@ -64,7 +64,15 @@ recommend).
 |---|---|---|---|
 | `LEADS_API_SECRET` | secret (`secrets.required`) | none | Bearer token for every route. `wrangler deploy` refuses to deploy until it is set. |
 | `LEADS_WRITE_PAUSED` | var | `"false"` | `"true"` makes POST return `503` with `Retry-After: 300`. Auth is still checked first. GET and PATCH keep working. |
-| `LEADS_ALLOW_TRANSCRIPT_ONLY` | var | `"false"` | `"true"` also accepts a lead with no name and no email but a non-empty transcript (the shape `chat.ts` writes). Any email given must still be valid, and a name without an email is still rejected. See open question 1. |
+| `LEADS_ALLOW_TRANSCRIPT_ONLY` | var | `"false"` at the top level of `wrangler.jsonc`; `"true"` in `env.production` | `"true"` also accepts a lead with no name and no email but a non-empty transcript (the shape `chat.ts` writes). Any email given must still be valid, and a name without an email is still rejected. See open question 1. |
+
+**Production is the `production` environment.** Deploy it with `npx wrangler deploy --env production`.
+`env.production` repeats `vars`, `secrets` and the `d1_databases` binding, because Wrangler does
+not inherit them into an environment, and sets `name` to `services-leads-api`, so it updates the
+same Worker. Its `LEADS_ALLOW_TRANSCRIPT_ONLY` is `"true"` (COO decision 2026-10-17). The
+top-level value stays `"false"` (the strict default, pinned by a test). A bare
+`npx wrangler deploy` uses the top-level vars and would put `"false"` on the production Worker,
+after which every chat lead gets `400`.
 
 **D1 schema** (`migrations/0001_create_inbound_leads.sql`) mirrors the live table:
 
@@ -316,7 +324,7 @@ ones.
    `--secrets-file`. The file goes outside the repo:
    ```sh
    node -e "require('fs').writeFileSync(require('os').homedir()+'/leads-api.secrets.env','LEADS_API_SECRET='+require('crypto').randomBytes(32).toString('hex')+'\n')"
-   npx wrangler deploy --secrets-file "$HOME/leads-api.secrets.env"
+   npx wrangler deploy --env production --secrets-file "$HOME/leads-api.secrets.env"
    ```
    - Copy the value into the password manager.
    - Note the URL: `https://services-leads-api.<subdomain>.workers.dev`.
@@ -329,13 +337,11 @@ ones.
      imported rows.
    - Do not POST test leads to the live database. If you have to, delete them afterwards
      with `wrangler d1 execute`.
-7. **Decide open question 1.** If transcript-only leads are approved:
-   - set `"LEADS_ALLOW_TRANSCRIPT_ONLY": "true"` in `wrangler.jsonc`;
-   - run `npx wrangler deploy`;
-   - commit the change.
-
-   Without this, every chat lead gets `400` from the Worker in dual mode, and you will see
-   `Dual write: Worker save failed ... 400` for each one.
+7. **Open question 1 is decided:** transcript-only leads are accepted in production
+   (COO, 2026-10-17). `env.production` in `wrangler.jsonc` already sets
+   `"LEADS_ALLOW_TRANSCRIPT_ONLY": "true"`, so the `--env production` deploy in step 5 carries it.
+   A deploy without `--env production` would put the top-level `"false"` on the Worker, and
+   every chat lead would get `400` in dual mode (`Dual write: Worker save failed ... 400`).
 8. **Merge to main on the owner's go.** Netlify builds only `main`. With `LEADS_BACKEND`
    unset the deploy behaves exactly as today.
 9. **Netlify env** (Site configuration → Environment variables, scope Functions):
@@ -369,8 +375,8 @@ unset or `dual`). At the switch, add `LEADS_BACKEND=worker`, `LEADS_API_URL` and
 
 - **Rollback (any time):** in Netlify, set `LEADS_BACKEND=supabase` or delete it, then
   redeploy. Supabase was written all along in `dual`, so nothing is lost.
-- **Pause Worker writes:** set `LEADS_WRITE_PAUSED` to `"true"` and run
-  `npx wrangler deploy`.
+- **Pause Worker writes:** set `LEADS_WRITE_PAUSED` to `"true"` in `env.production` and run
+  `npx wrangler deploy --env production`.
   - In `dual`, leads still reach Supabase.
   - In `worker` mode a pause means leads are **not stored**: `chat.ts` logs and carries on,
     and `submit-lead.ts` falls back to notifications only. Use it only briefly.
