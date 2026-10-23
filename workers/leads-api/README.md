@@ -35,6 +35,14 @@ cross-origin.
 | `POST /leads` | `Authorization: Bearer <LEADS_API_SECRET>` | `201 {"id": n}` + `Location: /leads/n` |
 | `GET /leads?downloaded=true\|false&limit=1..500&after_id=n` | same | `200 {"leads": [...], "next_after_id": n \| null}`, oldest id first, `downloaded` as boolean |
 | `PATCH /leads/:id` body exactly `{"downloaded": true\|false}` | same | `200 {"lead": {...}}`, `404` unknown id |
+| `GET /health`, `HEAD /health` | none | `200 {"status":"ok"}` with `Cache-Control: no-store` (`HEAD`: same headers, empty body) |
+
+`/health` is the liveness check for uptime monitors. It is the only route that needs no
+secret, and it returns nothing but that fixed body: no version, no environment, no data. It
+does not touch D1 and does not check the secret, so it proves the Worker is up and nothing
+more. It writes **no audit row** (so a monitor polling it cannot bury the `auth.refused`
+signal), and one request log line with `route` `GET /health` (`HEAD /health` for `HEAD`). Any
+other method on `/health`, and any other path, is still a plain `404` with no audit row.
 
 Status codes: `400` validation or bad query (`{"error","details":[...]}`), `401` missing or
 wrong secret (with `WWW-Authenticate: Bearer`), `405` wrong method (with `Allow`), `413` body
@@ -145,6 +153,7 @@ workers/leads-api/
   src/log.ts                       structured JSON logs (SEC-K)
   test/leads.test.ts               SV-1 behaviour tests
   test/audit.test.ts               SEC-SV tests (audit rows, chain, no-leak scan)
+  test/health.test.ts              GET/HEAD /health (no secret, no audit row, log route)
   .dev.vars.example                secret names for `wrangler dev`
 ```
 
@@ -182,14 +191,14 @@ npm run typecheck
 npm test
 ```
 
-Results on `backend/cloudflare` with SEC-SV on 2026-10-19 (Node 22.22.0, npm 10.9.4). Both
-typechecks were clean:
+Results on `backend/cloudflare` with SEC-SV on 2026-10-19 (Node 22.22.0, npm 10.9.4); the
+Worker line was updated on 2026-10-22 for the `/health` tests. Both typechecks were clean:
 
 ```
 workers/leads-api  $ npm test
  RUN  v4.1.11 .../workers/leads-api
- Test Files  2 passed (2)
-      Tests  119 passed (119)      # leads.test.ts 85 (SV-1) + audit.test.ts 34 (SEC-SV)
+ Test Files  3 passed (3)
+      Tests  141 passed (141)      # leads.test.ts 85 (SV-1) + audit.test.ts 34 (SEC-SV) + health.test.ts 22
 
 tests  $ npm test
  RUN  v4.1.11 .../tests
@@ -236,6 +245,15 @@ What they cover:
   - These tests were mutation-checked: logging the `Authorization` header, putting the email
     in the audit target, skipping the hash check in `verifyChain`, and disabling the chain
     retry each made them fail.
+- **Worker, `/health` (22, `test/health.test.ts`):**
+  - `GET /health` gives 200 `{"status":"ok"}` with `Cache-Control: no-store` and no
+    `Authorization` header, with nothing else in the body;
+  - `HEAD /health` gives 200, the same headers and an empty body;
+  - neither writes an audit row or a lead row, and they leave the `auth.refused` count alone;
+  - one log line each, with `route` `GET /health` / `HEAD /health`, `audit_id` and
+    `audit_hash` null, and no query string;
+  - other paths and other methods on `/health` are still 404 with no audit row, and the
+    `/leads` routes still need the secret.
 - **tests/ (47):**
   - for each of `chat.ts` and `submit-lead.ts`: all three modes;
   - the Supabase request (URL, method, headers, JSON body) is unchanged in `supabase` and
@@ -441,7 +459,7 @@ One row per event:
 | `LEADS_API_SECRET` unset on the Worker | `auth.refused` | `refused_server_misconfigured` | `anonymous` | route template |
 | a handler throws after auth | that route's action | `error` | `shared-secret` | as far as known |
 
-Unknown paths (404 before auth) are logged, not audited. **Rate-limit trips:** none, because
+Unknown paths (404 before auth) and `GET`/`HEAD /health` are logged, not audited. **Rate-limit trips:** none, because
 the Worker has no rate limiter (open question 7).
 
 **If the audit row cannot be written:**

@@ -5,6 +5,11 @@
 //   GET   /leads      list leads (admin)       -> 200 { leads, next_after_id }
 //   PATCH /leads/:id  set `downloaded` (admin) -> 200 { lead }
 //
+// One route needs no secret:
+//   GET | HEAD /health   liveness for uptime monitors -> 200 { "status": "ok" }
+// It reads no data and returns nothing but that fixed body (no version, no environment), so it
+// writes no audit_events row. It is a liveness check only: it does not touch D1 or the secret.
+//
 // Server-to-server only (called from Netlify functions and scripts/sync-leads.js).
 // No CORS headers are sent, so browsers cannot call it cross-origin.
 //
@@ -90,10 +95,17 @@ async function authenticate(request: Request, secret: string): Promise<AuthOutco
 
 const KNOWN_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
 
+// Only GET and HEAD are the health check. Any other method on /health stays what it was
+// before the route existed: an unmatched path (404, no audit row).
+function isHealthCheck(requestMethod: string, url: URL): boolean {
+  return url.pathname === '/health' && (requestMethod === 'GET' || requestMethod === 'HEAD')
+}
+
 // Route template for logs and audit targets. Never the raw path or a custom method: both
 // are caller-controlled and could carry anything.
 function routeName(requestMethod: string, url: URL): string {
   const method = KNOWN_METHODS.has(requestMethod) ? requestMethod : 'OTHER'
+  if (isHealthCheck(requestMethod, url)) return `${method} /health`
   if (url.pathname === '/leads') return `${method} /leads`
   if (/^\/leads\/[^/]+$/.test(url.pathname)) return `${method} /leads/:id`
   return `${method} (unmatched)`
@@ -285,6 +297,12 @@ function authenticatedAudit(action: string, failClosed: boolean): AuditDraft {
 }
 
 async function route(request: Request, url: URL, env: Env, ctx: RequestContext): Promise<Response> {
+  // Before the /leads match and before auth. ctx.audit stays null, so no audit row is written.
+  if (isHealthCheck(request.method, url)) {
+    const health = json(200, { status: 'ok' })
+    return request.method === 'HEAD' ? new Response(null, { status: 200, headers: health.headers }) : health
+  }
+
   const itemMatch = /^\/leads\/([^/]+)$/.exec(url.pathname)
   const isCollection = url.pathname === '/leads'
 
