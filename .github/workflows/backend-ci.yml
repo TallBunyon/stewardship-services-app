@@ -1,7 +1,8 @@
 # Backend CI (SV-1 + SEC-SV): tests for the leads-api Worker and the Netlify functions,
 # a gitleaks secret scan of the full history, and npm audit gates that fail on any high or
 # critical advisory in runtime dependencies (Worker and root app). Runs on pushes to
-# backend/** (which includes backend/cloudflare). Nothing here deploys anything.
+# backend/** (which includes backend/cloudflare) and on pull requests to main. Nothing here
+# deploys anything.
 name: backend-ci
 
 on:
@@ -9,6 +10,9 @@ on:
     branches:
       - 'backend/cloudflare'
       - 'backend/**'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:

@@ -123,7 +123,7 @@ and `main()` runs only when the file is executed directly.
 ### CI: `.github/workflows/backend-ci.yml`
 
 Runs on pushes to `backend/**`, which includes `backend/cloudflare` (also listed explicitly),
-and on manual dispatch, with `contents: read` only:
+on pull requests to `main`, and on manual dispatch, with `contents: read` only:
 
 - `worker-tests`: `npm audit --omit=dev --audit-level=high` (fails the job on any high or
   critical runtime advisory), Worker tests and typecheck.
