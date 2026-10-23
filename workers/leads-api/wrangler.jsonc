@@ -5,15 +5,20 @@
   // Must not be newer than the workerd bundled with the pinned wrangler (4.147.0 -> workerd 1.20261001.1).
   "compatibility_date": "2026-10-01",
   "observability": {
-    "enabled": true
+    "enabled": true,
+    // Workers Issues (open beta): records an occurrence on an uncaught exception or a 5xx.
+    "issues": { "enabled": true }
   },
+  // Workers trace events for Logpush (Workers Paid). The Logpush job itself is set up in the
+  // dashboard and writes to R2 bucket stewardship-worker-logs (365-day lifecycle rule).
+  "logpush": true,
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "services-leads",
-      // Placeholder. SV-2 replaces it with the id printed by `wrangler d1 create services-leads`.
+      // Set by SV-2 (2026-10-23) from `wrangler d1 create services-leads`.
       // A D1 database id is an identifier, not a credential, so the real one may be committed.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "2c156a0c-acde-4aae-88bd-0c41f48b6641",
       "migrations_dir": "migrations"
     }
   ],
@@ -44,9 +49,8 @@
         {
           "binding": "DB",
           "database_name": "services-leads",
-          // Placeholder. Keep identical to the top-level d1_databases entry: SV-2 sets both
-          // to the id printed by `wrangler d1 create services-leads`.
-          "database_id": "00000000-0000-0000-0000-000000000000",
+          // Keep identical to the top-level d1_databases entry (set by SV-2, 2026-10-23).
+          "database_id": "2c156a0c-acde-4aae-88bd-0c41f48b6641",
           "migrations_dir": "migrations"
         }
       ],
@@ -54,6 +58,27 @@
         "LEADS_WRITE_PAUSED": "false",
         // COO decision 2026-10-17 (README "Open questions" #1): chat transcript-only leads are
         // accepted in production.
+        "LEADS_ALLOW_TRANSCRIPT_ONLY": "true"
+      },
+      "secrets": {
+        "required": ["LEADS_API_SECRET"]
+      }
+    },
+    // Staging: a separate, empty Worker and D1 that hold synthetic test leads only. Reached only
+    // from Netlify deploy previews and branch deploys (LEADS_BACKEND=worker there), never from
+    // production. Deploy with `npx wrangler deploy --env staging`.
+    "staging": {
+      "name": "services-leads-api-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "services-leads-staging",
+          "database_id": "b3b868de-80f5-42e3-a310-5aecaedab778",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "vars": {
+        "LEADS_WRITE_PAUSED": "false",
         "LEADS_ALLOW_TRANSCRIPT_ONLY": "true"
       },
       "secrets": {
