@@ -1,4 +1,10 @@
 import type { Handler, HandlerEvent } from '@netlify/functions'
+import {
+  persistLead,
+  resolveLeadsBackend,
+  saveLeadToWorker,
+  type LeadsBackend,
+} from '../lib/leads-backend'
 
 interface LeadData {
   name?: string
@@ -56,6 +62,27 @@ async function persistLeadToSupabase(lead: LeadData): Promise<void> {
     const body = await response.text()
     throw new Error(`Supabase insert returned ${response.status}: ${body}`)
   }
+}
+
+// LEADS_BACKEND = supabase (default) | dual | worker. See netlify/lib/leads-backend.ts.
+async function persistLeadToBackend(lead: LeadData, backend: LeadsBackend): Promise<void> {
+  await persistLead({
+    backend,
+    saveToSupabase: () => persistLeadToSupabase(lead),
+    saveToWorker: () =>
+      saveLeadToWorker(
+        {
+          name: lead.name ?? null,
+          email: lead.email ?? null,
+          budget: lead.budget ?? null,
+          timeline: lead.timeline ?? null,
+          transcript: lead.transcript ?? lead.summary ?? null,
+          source: 'steward-services',
+        },
+        { url: process.env.LEADS_API_URL, secret: process.env.LEADS_API_SECRET }
+      ),
+    logPrefix: '[submit-lead]',
+  })
 }
 
 
@@ -137,16 +164,19 @@ export const handler: Handler = async (event: HandlerEvent) => {
   }
 
   const timestamp = formatTimestampCST()
+  const backend = resolveLeadsBackend(process.env.LEADS_BACKEND)
+  // In supabase and dual mode the user-visible outcome is Supabase's, so messages are unchanged.
+  const persistenceLabel = backend === 'worker' ? 'Worker' : 'Supabase'
   let persistenceSucceeded = false
   let notificationSucceeded = false
   let notificationMessage = 'Resend notification failed'
   let fallbackMessage = 'Fallback Telegram notification failed'
 
   try {
-    await persistLeadToSupabase(lead)
+    await persistLeadToBackend(lead, backend)
     persistenceSucceeded = true
-  } catch (supabaseError) {
-    console.error('[submit-lead] Supabase persistence error:', supabaseError)
+  } catch (persistenceError) {
+    console.error(`[submit-lead] ${persistenceLabel} persistence error:`, persistenceError)
   }
 
   try {
@@ -170,7 +200,7 @@ export const handler: Handler = async (event: HandlerEvent) => {
   if (!persistenceSucceeded && !notificationSucceeded) {
     return {
       statusCode: 502,
-      body: `Supabase persistence failed; ${notificationMessage}; Telegram fallback failed: ${fallbackMessage}`,
+      body: `${persistenceLabel} persistence failed; ${notificationMessage}; Telegram fallback failed: ${fallbackMessage}`,
     }
   }
 

@@ -1,0 +1,17 @@
+{
+  "name": "services-app-tests",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tests for netlify/functions and scripts. Kept as a separate package so the site's build dependencies (root package-lock.json) are untouched.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@netlify/functions": "2.8.2",
+    "@types/node": "22.20.4",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}
